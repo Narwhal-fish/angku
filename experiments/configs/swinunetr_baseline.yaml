@@ -1,0 +1,61 @@
+# Phase 0 baseline. Placeholder commit / digest / snapshot values are
+# syntactically valid pins; they get replaced by real ones once the code,
+# image and dataset snapshot exist.
+
+meta:
+  name: swinunetr-baseline
+  description: SwinUNETR on a public 3D segmentation dataset, single GPU
+  tags: [baseline, swinunetr, phase0]
+
+code:
+  repo: https://github.com/example/mlManager
+  commit: 0123456789abcdef0123456789abcdef01234567
+
+environment:
+  image: ghcr.io/example/mlops-train:0.1.0
+  image_digest: sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+
+dataset:
+  name: msd-task09-spleen
+  version: v1
+  snapshot: dvc:8d1f2c3a4b5e6f7081920a1b2c3d4e5f
+
+preprocessing:
+  spacing: [1.5, 1.5, 2.0]
+  intensity_range: [-57, 164]
+  roi_size: [96, 96, 96]
+
+model:
+  name: swinunetr
+  params:
+    in_channels: 1
+    out_channels: 2
+    feature_size: 48
+    use_checkpoint: true
+
+training:
+  epochs: 100
+  batch_size: 4          # global effective batch; runner splits by world_size
+  learning_rate: 1.0e-4
+  optimizer: adamw
+  seed: 42
+
+augmentation:
+  - name: rand_flip
+    params: {prob: 0.5, spatial_axis: [0, 1, 2]}
+  - name: rand_rotate90
+    params: {prob: 0.1, max_k: 3}
+
+loss:
+  name: dice_ce
+  params: {to_onehot_y: true, softmax: true}
+
+resources:
+  gpu: 1
+  cpu: 8
+  memory: 32Gi
+
+tracking:
+  backend: mlflow
+  experiment_name: spleen-segmentation
+  uri: http://localhost:5000
