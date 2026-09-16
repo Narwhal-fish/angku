@@ -155,3 +155,45 @@ def test_spec_is_immutable(raw):
     spec = load_experiment_dict(raw)
     with pytest.raises(Exception):
         spec.training.learning_rate = 1.0  # type: ignore[misc]
+
+
+# --- resources.workers: the world size, a RunID matter, never an ExperimentID matter ---
+
+
+def test_workers_defaults_to_one_and_changes_run_id_only(raw):
+    spec1 = load_experiment_dict(raw)
+    assert spec1.resources.workers == 1
+    two = copy.deepcopy(raw)
+    two["resources"]["workers"] = 2
+    spec2 = load_experiment_dict(two)
+    assert compute_experiment_id(spec1) == compute_experiment_id(spec2)
+    assert compute_run_id(compute_experiment_id(spec1), spec1.resources) != compute_run_id(
+        compute_experiment_id(spec2), spec2.resources
+    )
+
+
+def test_global_batch_must_split_evenly_across_workers(raw):
+    raw["training"]["batch_size"] = 4
+    raw["resources"]["workers"] = 3
+    with pytest.raises(ConfigError, match="batch_size=4.*workers=3"):
+        load_experiment_dict(raw)
+
+
+def test_per_worker_batch(raw):
+    raw["training"]["batch_size"] = 8
+    raw["resources"]["workers"] = 4
+    assert load_experiment_dict(raw).per_worker_batch_size() == 2
+
+
+def test_workers_must_be_positive(raw):
+    raw["resources"]["workers"] = 0
+    with pytest.raises(ConfigError):
+        load_experiment_dict(raw)
+
+
+def test_training_deterministic_defaults_on_and_is_part_of_experiment_id(raw):
+    spec = load_experiment_dict(raw)
+    assert spec.training.deterministic is True
+    off = copy.deepcopy(raw)
+    off["training"]["deterministic"] = False
+    assert compute_experiment_id(spec) != compute_experiment_id(load_experiment_dict(off))

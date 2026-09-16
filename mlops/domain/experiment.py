@@ -14,7 +14,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 IMAGE_DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -102,6 +102,9 @@ class Training(_Strict):
     learning_rate: float = Field(gt=0)
     optimizer: str
     seed: int
+    # Force torch onto deterministic kernels (slower on GPU, but two runs with the same
+    # seed give bit-identical weights). Part of the fingerprint because it changes results.
+    deterministic: bool = True
 
 
 class Augmentation(_Strict):
@@ -115,11 +118,17 @@ class Loss(_Strict):
 
 
 class Resources(_Strict):
-    """Hardware allocation. Part of RunID only, never ExperimentID."""
+    """Hardware allocation. Part of RunID only, never ExperimentID.
+
+    ``workers`` is the world size: the number of training processes. ``gpu``,
+    ``cpu`` and ``memory`` are *per worker*. ``gpu > 0`` means every worker
+    needs CUDA.
+    """
 
     gpu: int = Field(ge=0)
     cpu: int = Field(gt=0)
     memory: str
+    workers: int = Field(default=1, ge=1)
 
 
 class Tracking(_Strict):
@@ -142,6 +151,18 @@ class ExperimentSpec(_Strict):
     loss: Loss
     resources: Resources
     tracking: Tracking = Field(default_factory=Tracking)
+
+    @model_validator(mode="after")
+    def _batch_splits_across_workers(self) -> ExperimentSpec:
+        if self.training.batch_size % self.resources.workers:
+            raise ValueError(
+                f"training.batch_size={self.training.batch_size} must be divisible by "
+                f"resources.workers={self.resources.workers} (batch_size is the global batch)"
+            )
+        return self
+
+    def per_worker_batch_size(self) -> int:
+        return self.training.batch_size // self.resources.workers
 
     def unpinned_inputs(self) -> list[str]:
         """Dotted paths of inputs that are still not pinned to an immutable id."""
