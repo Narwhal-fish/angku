@@ -1,0 +1,52 @@
+# Smallest possible experiment: exercises the platform end to end without any
+# domain-specific dependency. Pins are syntactically valid placeholders.
+
+meta:
+  name: tiny-cnn-smoke
+  description: Platform smoke test with a 3-layer conv net
+  tags: [smoke]
+
+code:
+  repo: https://github.com/example/mlManager
+  commit: 0123456789abcdef0123456789abcdef01234567
+
+environment:
+  image: ghcr.io/example/mlops-train:0.1.0
+  image_digest: sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+
+dataset:
+  name: synthetic-blobs
+  version: v1
+  snapshot: sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210
+
+preprocessing: {}
+
+model:
+  name: tiny_cnn
+  params:
+    in_channels: 1
+    out_channels: 2
+    hidden: 4
+    spatial_dims: 3
+
+training:
+  epochs: 1
+  batch_size: 2
+  learning_rate: 1.0e-3
+  optimizer: adam
+  seed: 0
+
+augmentation: []
+
+loss:
+  name: cross_entropy
+  params: {}
+
+resources:
+  gpu: 0
+  cpu: 2
+  memory: 2Gi
+
+tracking:
+  backend: mlflow
+  experiment_name: smoke

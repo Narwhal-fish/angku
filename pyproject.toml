@@ -1,16 +1,25 @@
 [project]
 name = "mlops"
 version = "0.0.1"
-description = "MLOps platform for reproducible medical-imaging experiments"
+description = "MLOps platform for reproducible model-training experiments"
 requires-python = ">=3.12"
+# Core platform: framework-agnostic except for torch (the runner needs it).
+# Install with `uv pip install -e ".[dev]" --torch-backend=auto` so uv picks
+# the CPU wheel on the dev box and the matching CUDA wheel on GPU machines.
 dependencies = [
     "pydantic>=2.11",
     "pyyaml>=6.0",
+    "torch>=2.14",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
+]
+# Domain-specific extras used by models under experiments/, never by mlops/.
+medical = [
+    "monai>=1.6",
+    "einops>=0.8",  # MONAI optional dep, required by SwinUNETR.forward
 ]
 
 [build-system]
