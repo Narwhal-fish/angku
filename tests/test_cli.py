@@ -697,3 +697,51 @@ def test_not_reproduced_explains_with_environment_differences(finished_run, caps
     out = capsys.readouterr().out
     assert "NOT REPRODUCED" in out
     assert "environment differences" in out and "code.changed" in out and "mlops/x.py" in out
+
+
+# --- resumable RayJobs: --checkpoint-every + --ray-storage-pvc, then `rayjob --resume` ---
+
+_RESUMABLE = ["--data-pvc", "msd", "--artifacts-pvc", "runs", "--ray-storage-pvc", "ray-ckpt"]
+
+
+def test_rayjob_checkpointing_reaches_the_manifest(capsys):
+    assert main(["rayjob", str(BASELINE), *_RESUMABLE, "--checkpoint-every", "5"]) == 0
+    job = json.loads(capsys.readouterr().out)["items"][1]
+    assert "--checkpoint-every 5" in job["spec"]["entrypoint"] and "--ray-storage /ray-storage" in job["spec"]["entrypoint"]
+
+
+@pytest.mark.parametrize("flags,hint", [
+    (["--data-pvc", "msd", "--artifacts-pvc", "runs"], "--ray-storage-pvc"),
+    (["--data-pvc", "msd", "--ray-storage-pvc", "ray-ckpt"], "--artifacts-pvc"),
+])
+@pytest.mark.parametrize("mode", [["--checkpoint-every", "5"], ["--resume"]])
+def test_rayjob_resumability_without_pvcs_exits_2(capsys, flags, hint, mode):
+    assert main(["rayjob", str(BASELINE), *flags, *mode]) == 2
+    err = capsys.readouterr().err
+    assert hint in err and "Traceback" not in err
+
+
+def test_rayjob_resume_renders_one_rayjob_running_mlops_resume(capsys):
+    assert main(["rayjob", str(BASELINE), *_RESUMABLE, "--attempt", "2", "--resume"]) == 0
+    (job,) = json.loads(capsys.readouterr().out)["items"]
+    assert job["metadata"]["name"].endswith("-a2-resume")
+    assert job["spec"]["entrypoint"].startswith("mlops resume " + job["metadata"]["annotations"]["mlops.io/run-id"])
+
+
+def test_rayjob_resume_submit_creates_and_explains_a_name_clash(capsys, monkeypatch):
+    calls = _fake_kubectl(monkeypatch)
+    assert main(["rayjob", str(BASELINE), *_RESUMABLE, "--resume", "--submit"]) == 0
+    assert calls[0][:2] == ["kubectl", "create"]
+    assert "mlops rayjob-status mlops-" in capsys.readouterr().out
+
+    _fake_kubectl(monkeypatch, returncode=1, stderr='Error from server (AlreadyExists): rayjobs.ray.io "x" already exists')
+    assert main(["rayjob", str(BASELINE), *_RESUMABLE, "--resume", "--submit", "--namespace", "ml"]) == 2
+    err = capsys.readouterr().err
+    assert "AlreadyExists" in err and "kubectl delete rayjob mlops-" in err and "-n ml" in err
+
+
+def test_rayjob_checkpointing_submit_says_how_to_resume(capsys, monkeypatch):
+    _fake_kubectl(monkeypatch)
+    assert main(["rayjob", str(BASELINE), *_RESUMABLE, "--checkpoint-every", "5", "--submit"]) == 0
+    out = capsys.readouterr().out
+    assert "--resume" in out and "--ray-storage-pvc ray-ckpt" in out

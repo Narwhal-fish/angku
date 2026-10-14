@@ -9,6 +9,7 @@ concrete adapters (tracker, data provider, artifact store) and hands them to
     mlops resume RUN_ID --artifacts DIR [--data-root DIR] [--tracker mlflow|inmemory] [--mlflow-uri URI]
                                  [--device cpu] [--ray-address ADDR] [--checkpoint-every N] [--json]
     mlops rayjob experiment.yaml [--namespace NS] [--artifacts-pvc PVC] [--data-pvc PVC] [--attempt N]
+                                 [--checkpoint-every N --ray-storage-pvc PVC] [--resume]
                                  [--submit [--kubectl "kubectl --context X"]]
     mlops rayjob-status NAME [--namespace NS] [--kubectl CMD] [--json]
     mlops rayjob-logs   NAME [--namespace NS] [--kubectl CMD] [-f]
@@ -300,6 +301,12 @@ def cmd_rayjob(args: argparse.Namespace) -> int:
             f"dataset {spec.dataset.name!r} reads files: pass --data-pvc PVC (a claim holding them, "
             "mounted read-only at --data-path) so the in-cluster run can find its data"
         )
+    if args.checkpoint_every is not None or args.resume:
+        # Checkpoints and launch.json must outlive the RayJob's cluster (shutdownAfterJobFinishes).
+        for flag, value, what in (("--artifacts-pvc", args.artifacts_pvc, "spec.json + launch.json"),
+                                  ("--ray-storage-pvc", args.ray_storage_pvc, "Ray Train's checkpoints")):
+            if not value:
+                raise CliError(f"a resumable RayJob needs {flag} PVC ({what} must outlive the job's cluster)")
     try:
         items = render_rayjob(
             spec,
@@ -310,21 +317,47 @@ def cmd_rayjob(args: argparse.Namespace) -> int:
             mlflow_uri=args.mlflow_uri or spec.tracking.uri or None,
             data_pvc=args.data_pvc,
             data_path=args.data_path,
+            checkpoint_every=args.checkpoint_every,
+            ray_storage_pvc=args.ray_storage_pvc,
+            ray_storage_path=args.ray_storage_path,
+            resume=args.resume,
         )
-    except UnpinnedInputError as e:
+    except (UnpinnedInputError, ValueError) as e:
         raise CliError(str(e)) from e
     if not args.submit:
         print(json.dumps({"apiVersion": "v1", "kind": "List", "items": items}, indent=2))
         return 0
     try:
-        name = submit_rayjob(items, kubectl=shlex.split(args.kubectl), run=subprocess.run)
+        name = submit_rayjob(items, kubectl=shlex.split(args.kubectl), run=subprocess.run, create=args.resume)
     except (KubeRayError, OSError) as e:
+        if args.resume and "AlreadyExists" in str(e):
+            name = items[-1]["metadata"]["name"]
+            raise CliError(f"{e}\n  an earlier resume job of this run still exists; once it has finished, "
+                           f"delete it (its state is on the PVCs): {args.kubectl} delete rayjob {name} "
+                           f"-n {args.namespace}") from e
         raise CliError(str(e)) from e
     print(f"submitted RayJob {name} in namespace {args.namespace}")
     follow = f"--namespace {args.namespace}" + (f" --kubectl '{args.kubectl}'" if args.kubectl != "kubectl" else "")
     print(f"  status: mlops rayjob-status {name} {follow}")
     print(f"  logs:   mlops rayjob-logs {name} {follow} -f")
+    if args.checkpoint_every is not None and not args.resume:
+        print(f"  resume: mlops rayjob {args.experiment} --resume {_rayjob_volume_flags(args)} --submit")
     return 0
+
+
+def _rayjob_volume_flags(args: argparse.Namespace) -> str:
+    """The flags a resume job must repeat: same run (attempt), same claims at the same paths."""
+    flags = [f"--namespace {args.namespace}", f"--attempt {args.attempt}",
+             f"--artifacts-pvc {args.artifacts_pvc}", f"--ray-storage-pvc {args.ray_storage_pvc}"]
+    if args.artifacts_path != "/artifacts":
+        flags.append(f"--artifacts-path {args.artifacts_path}")
+    if args.ray_storage_path != "/ray-storage":
+        flags.append(f"--ray-storage-path {args.ray_storage_path}")
+    if args.data_pvc:
+        flags.append(f"--data-pvc {args.data_pvc}" + (f" --data-path {args.data_path}" if args.data_path != "/data" else ""))
+    if args.kubectl != "kubectl":
+        flags.append(f"--kubectl '{args.kubectl}'")
+    return " ".join(flags)
 
 
 def cmd_rayjob_status(args: argparse.Namespace) -> int:
@@ -573,6 +606,16 @@ def build_parser() -> argparse.ArgumentParser:
                     help="PersistentVolumeClaim holding the dataset files (e.g. Task09_Spleen/), mounted read-only")
     rj.add_argument("--data-path", default="/data", help="mount path of that PVC; passed as --data-root")
     rj.add_argument("--mlflow-uri", metavar="URI", help="override tracking.uri for the in-cluster run")
+    rj.add_argument("--checkpoint-every", type=int, metavar="N",
+                    help="checkpoint every N epochs so the job can be resumed with --resume "
+                         "(needs --artifacts-pvc and --ray-storage-pvc)")
+    rj.add_argument("--ray-storage-pvc", metavar="PVC",
+                    help="PersistentVolumeClaim for Ray Train's checkpoints, writable on every pod "
+                         "(ReadWriteMany across nodes); passed as --ray-storage")
+    rj.add_argument("--ray-storage-path", default="/ray-storage", help="mount path of that PVC inside the pods")
+    rj.add_argument("--resume", action="store_true",
+                    help="render a RayJob (<name>-resume) that runs `mlops resume` for this spec + --attempt "
+                         "from the checkpoints on the PVCs; pass the same PVCs and paths as the first job")
     rj.add_argument("--submit", action="store_true", help="kubectl apply the manifest instead of printing it")
     rj.add_argument("--kubectl", default="kubectl", help='kubectl command, e.g. "kubectl --context prod"')
     rj.set_defaults(func=cmd_rayjob)

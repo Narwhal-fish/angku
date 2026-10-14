@@ -297,3 +297,107 @@ def test_no_data_pvc_no_data_volume(spec):
     for pod in _pods(job):
         assert "data" not in {v["name"] for v in pod["volumes"]}
     assert "--data-root" not in job["spec"]["entrypoint"]
+
+
+# --- resumable jobs: Ray checkpoints + launch.json on PVCs that outlive the RayJob's cluster ---
+
+
+def _mounts(pod):
+    (container,) = pod["containers"]
+    return {m["name"]: m for m in container["volumeMounts"]}
+
+
+def _resumable(spec, **kw):
+    return render_rayjob(spec, artifacts_pvc="runs", ray_storage_pvc="ray-ckpt", data_pvc="msd", **kw)
+
+
+def test_checkpointing_job_stores_ray_checkpoints_on_a_shared_pvc(spec):
+    _, job = _resumable(spec, checkpoint_every=5)
+    entry = job["spec"]["entrypoint"]
+    assert "--checkpoint-every 5" in entry and "--ray-storage /ray-storage" in entry
+    # Ray workers write their checkpoint shards, the driver (head) looks them up on resume:
+    # every pod sees the same claim, writable, at the same path.
+    for pod in _pods(job):
+        vols = {v["name"]: v for v in pod["volumes"]}
+        assert vols["ray-storage"]["persistentVolumeClaim"] == {"claimName": "ray-ckpt"}
+        assert _mounts(pod)["ray-storage"] == {"name": "ray-storage", "mountPath": "/ray-storage"}
+
+
+def test_ray_storage_path_is_configurable(spec):
+    _, job = _resumable(spec, checkpoint_every=1, ray_storage_path="/mnt/ray")
+    assert "--ray-storage /mnt/ray" in job["spec"]["entrypoint"]
+    head, _, _ = _containers(job)
+    assert {m["name"]: m["mountPath"] for m in head["volumeMounts"]}["ray-storage"] == "/mnt/ray"
+
+
+def test_no_checkpointing_no_ray_storage(spec):
+    _, job = render_rayjob(spec, artifacts_pvc="runs")
+    entry = job["spec"]["entrypoint"]
+    assert "--checkpoint-every" not in entry and "--ray-storage" not in entry
+    for pod in _pods(job):
+        assert "ray-storage" not in {v["name"] for v in pod["volumes"]}
+
+
+@pytest.mark.parametrize("kw,missing", [
+    ({"ray_storage_pvc": "ray-ckpt"}, "artifacts_pvc"),
+    ({"artifacts_pvc": "runs"}, "ray_storage_pvc"),
+])
+@pytest.mark.parametrize("mode", [{"checkpoint_every": 5}, {"resume": True}])
+def test_resumability_needs_both_pvcs(spec, kw, missing, mode):
+    # Without them the checkpoints / launch.json die with the cluster: refuse instead of
+    # rendering a job that only looks resumable.
+    with pytest.raises(ValueError, match=missing):
+        render_rayjob(spec, **kw, **mode)
+
+
+def test_checkpoint_every_must_be_positive(spec):
+    with pytest.raises(ValueError, match="checkpoint_every"):
+        _resumable(spec, checkpoint_every=0)
+
+
+def test_resume_job_runs_mlops_resume_for_the_same_run(spec):
+    (fresh_cm, fresh), (job,) = _resumable(spec, attempt=2, checkpoint_every=5), _resumable(spec, attempt=2, resume=True)
+    rid = compute_run_id(compute_experiment_id(spec), spec.resources, attempt=2)
+    assert job["kind"] == "RayJob"
+    assert job["metadata"]["annotations"] == fresh["metadata"]["annotations"]
+    assert job["metadata"]["annotations"]["mlops.io/run-id"] == rid
+    # a new name: the first RayJob object may still exist (it is finished, not deleted)
+    assert job["metadata"]["name"] == fresh["metadata"]["name"] + "-resume"
+    entry = job["spec"]["entrypoint"]
+    assert entry.startswith(f"mlops resume {rid} --artifacts /artifacts")
+    assert "--data-root /data" in entry and "--mlflow-uri" not in entry
+    # spec.json and launch.json (storage path, interval, attempt) come from the artifacts PVC
+    assert "--checkpoint-every" not in entry and "--ray-storage" not in entry
+    # ... so the spec ConfigMap is not needed; the storage must sit where the first job put it
+    for pod in _pods(job):
+        assert "experiment" not in {v["name"] for v in pod["volumes"]}
+        assert {m["name"]: m["mountPath"] for m in _mounts(pod).values()} == {
+            "artifacts": "/artifacts", "ray-storage": "/ray-storage", "data": "/data"}
+    assert _containers(job)[0]["image"] == _containers(fresh)[0]["image"]
+
+
+def test_resume_job_can_change_the_checkpoint_interval(spec):
+    (job,) = _resumable(spec, resume=True, checkpoint_every=2, mlflow_uri="http://mlflow:5000")
+    entry = job["spec"]["entrypoint"]
+    assert "--checkpoint-every 2" in entry and "--mlflow-uri http://mlflow:5000" in entry
+
+
+@pytest.mark.parametrize("mode", [{"checkpoint_every": 3}, {"resume": True, "checkpoint_every": 3}])
+def test_entrypoint_is_accepted_by_the_mlops_cli(spec, mode):
+    # The in-cluster command must parse with the very CLI it calls: no flag drift.
+    from mlops.cli import build_parser
+
+    job = _by_kind(_resumable(spec, mlflow_uri="http://mlflow:5000", **mode), "RayJob")
+    argv = job["spec"]["entrypoint"].split()
+    assert argv[0] == "mlops"
+    args = build_parser().parse_args(argv[1:])
+    assert args.checkpoint_every == 3 and args.data_root == "/data" and args.artifacts == "/artifacts"
+
+
+def test_submit_can_create_instead_of_apply(spec):
+    # A resume job is created, never applied: `apply` on a leftover finished job of the same
+    # name would report "unchanged" and silently resume nothing.
+    kubectl = _FakeKubectl()
+    submit_rayjob(_resumable(spec, resume=True), run=kubectl, create=True)
+    ((cmd, _),) = kubectl.calls
+    assert cmd == ["kubectl", "create", "-n", "default", "-f", "-"]

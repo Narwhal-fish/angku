@@ -61,37 +61,70 @@ def render_rayjob(
     ttl_seconds: int = 3600,
     data_pvc: str | None = None,
     data_path: str = "/data",
+    checkpoint_every: int | None = None,
+    ray_storage_pvc: str | None = None,
+    ray_storage_path: str = "/ray-storage",
+    resume: bool = False,
 ) -> list[dict[str, Any]]:
-    """Return ``[ConfigMap, RayJob]`` as plain JSON-able dicts.
+    """Return ``[ConfigMap, RayJob]`` as plain JSON-able dicts (``[RayJob]`` with ``resume``).
 
     ``data_pvc`` mounts the dataset read-only at ``data_path`` on the head *and* every worker
     (the DataProvider is built on the driver and pickled to the ranks with its root) and passes
     ``--data-root data_path`` to ``mlops run``.
+
+    ``checkpoint_every`` makes the job resumable after ``shutdownAfterJobFinishes`` has deleted
+    its cluster: Ray Train's checkpoints go to ``ray_storage_pvc`` (writable, mounted on every
+    pod, so ReadWriteMany when pods span nodes) and ``spec.json`` + ``launch.json`` to
+    ``artifacts_pvc``; both are required. ``resume=True`` renders a RayJob named ``<name>-resume``
+    whose entrypoint is ``mlops resume RUN_ID``: spec, attempt, interval and storage path come
+    from those PVCs (so mount them at the same paths as the first job), no ConfigMap needed.
     """
     if not spec.is_pinned():
         raise UnpinnedInputError(spec.unpinned_inputs())
+    if checkpoint_every is not None and checkpoint_every < 1:
+        raise ValueError(f"checkpoint_every must be >= 1, got {checkpoint_every}")
+    if checkpoint_every or resume:
+        # Without both claims the state dies with the cluster: refuse rather than look resumable.
+        if not artifacts_pvc:
+            raise ValueError("a resumable RayJob needs artifacts_pvc (spec.json + launch.json live there)")
+        if not ray_storage_pvc:
+            raise ValueError("a resumable RayJob needs ray_storage_pvc (Ray Train's checkpoints live there)")
     experiment_id = compute_experiment_id(spec)
     run_id = compute_run_id(experiment_id, spec.resources, attempt)
-    name = f"mlops-{run_id[:12]}-a{attempt}"
+    name = rayjob_name(run_id, attempt, resume=resume)
     res = spec.resources
     image = image_ref(spec.environment.image, spec.environment.image_digest)
 
-    entrypoint = [
-        "mlops", "run", f"{SPEC_MOUNT}/{SPEC_FILE}",
-        "--launcher", "ray",
-        "--attempt", str(attempt),
-        "--artifacts", artifacts_path,
-    ]
+    if resume:
+        # Not `--attempt`/`--ray-storage`: launch.json on the artifacts PVC records both.
+        entrypoint = ["mlops", "resume", run_id, "--artifacts", artifacts_path]
+    else:
+        entrypoint = [
+            "mlops", "run", f"{SPEC_MOUNT}/{SPEC_FILE}",
+            "--launcher", "ray",
+            "--attempt", str(attempt),
+            "--artifacts", artifacts_path,
+        ]
+        if ray_storage_pvc:
+            entrypoint += ["--ray-storage", ray_storage_path]
+    if checkpoint_every:
+        entrypoint += ["--checkpoint-every", str(checkpoint_every)]
     if mlflow_uri:
         entrypoint += ["--mlflow-uri", mlflow_uri]
     if data_pvc:
         entrypoint += ["--data-root", data_path]
 
-    volumes: list[dict[str, Any]] = [{"name": "experiment", "configMap": {"name": name}}]
-    mounts: list[dict[str, Any]] = [{"name": "experiment", "mountPath": SPEC_MOUNT, "readOnly": True}]
+    volumes: list[dict[str, Any]] = []
+    mounts: list[dict[str, Any]] = []
+    if not resume:
+        volumes.append({"name": "experiment", "configMap": {"name": name}})
+        mounts.append({"name": "experiment", "mountPath": SPEC_MOUNT, "readOnly": True})
     if artifacts_pvc:
         volumes.append({"name": "artifacts", "persistentVolumeClaim": {"claimName": artifacts_pvc}})
         mounts.append({"name": "artifacts", "mountPath": artifacts_path})
+    if ray_storage_pvc:
+        volumes.append({"name": "ray-storage", "persistentVolumeClaim": {"claimName": ray_storage_pvc}})
+        mounts.append({"name": "ray-storage", "mountPath": ray_storage_path})
     if data_pvc:
         # Read-only twice over: the claim and the mount. A run must never alter its own inputs.
         volumes.append({"name": "data", "persistentVolumeClaim": {"claimName": data_pvc, "readOnly": True}})
@@ -161,7 +194,12 @@ def render_rayjob(
             },
         },
     }
-    return [configmap, rayjob]
+    return [rayjob] if resume else [configmap, rayjob]
+
+
+def rayjob_name(run_id: str, attempt: int, *, resume: bool = False) -> str:
+    # A resume job needs its own name: the first RayJob object outlives its cluster.
+    return f"mlops-{run_id[:12]}-a{attempt}" + ("-resume" if resume else "")
 
 
 Runner = Callable[..., Any]  # subprocess.run-compatible
@@ -172,12 +210,15 @@ def submit_rayjob(
     *,
     kubectl: Sequence[str] = ("kubectl",),
     run: Runner = subprocess.run,
+    create: bool = False,
 ) -> str:
-    """``kubectl apply`` the rendered objects; returns the RayJob name."""
+    """``kubectl apply`` the rendered objects (``create`` instead: fail if the name exists);
+    returns the RayJob name. A resume job must be created: ``apply`` on a leftover finished
+    job of that name would say "unchanged" and resume nothing."""
     (job,) = [i for i in items if i["kind"] == "RayJob"]
     namespace = job["metadata"]["namespace"]
     body = json.dumps({"apiVersion": "v1", "kind": "List", "items": list(items)})
-    cmd = [*kubectl, "apply", "-n", namespace, "-f", "-"]
+    cmd = [*kubectl, "create" if create else "apply", "-n", namespace, "-f", "-"]
     r = run(cmd, input=body, capture_output=True, text=True)
     if r.returncode != 0:
         raise KubeRayError(f"{' '.join(cmd)} failed ({r.returncode}): {r.stderr.strip()}")
