@@ -59,8 +59,15 @@ def render_rayjob(
     artifacts_path: str = "/artifacts",
     mlflow_uri: str | None = None,
     ttl_seconds: int = 3600,
+    data_pvc: str | None = None,
+    data_path: str = "/data",
 ) -> list[dict[str, Any]]:
-    """Return ``[ConfigMap, RayJob]`` as plain JSON-able dicts."""
+    """Return ``[ConfigMap, RayJob]`` as plain JSON-able dicts.
+
+    ``data_pvc`` mounts the dataset read-only at ``data_path`` on the head *and* every worker
+    (the DataProvider is built on the driver and pickled to the ranks with its root) and passes
+    ``--data-root data_path`` to ``mlops run``.
+    """
     if not spec.is_pinned():
         raise UnpinnedInputError(spec.unpinned_inputs())
     experiment_id = compute_experiment_id(spec)
@@ -77,12 +84,18 @@ def render_rayjob(
     ]
     if mlflow_uri:
         entrypoint += ["--mlflow-uri", mlflow_uri]
+    if data_pvc:
+        entrypoint += ["--data-root", data_path]
 
     volumes: list[dict[str, Any]] = [{"name": "experiment", "configMap": {"name": name}}]
     mounts: list[dict[str, Any]] = [{"name": "experiment", "mountPath": SPEC_MOUNT, "readOnly": True}]
     if artifacts_pvc:
         volumes.append({"name": "artifacts", "persistentVolumeClaim": {"claimName": artifacts_pvc}})
         mounts.append({"name": "artifacts", "mountPath": artifacts_path})
+    if data_pvc:
+        # Read-only twice over: the claim and the mount. A run must never alter its own inputs.
+        volumes.append({"name": "data", "persistentVolumeClaim": {"claimName": data_pvc, "readOnly": True}})
+        mounts.append({"name": "data", "mountPath": data_path, "readOnly": True})
 
     def container(cname: str, limits: dict[str, str]) -> dict[str, Any]:
         return {

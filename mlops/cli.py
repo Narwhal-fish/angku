@@ -8,7 +8,7 @@ concrete adapters (tracker, data provider, artifact store) and hands them to
                                  [--device cpu] [--attempt N] [--checkpoint-every N] [--strict-env] [--json]
     mlops resume RUN_ID --artifacts DIR [--data-root DIR] [--tracker mlflow|inmemory] [--mlflow-uri URI]
                                  [--device cpu] [--checkpoint-every N] [--json]
-    mlops rayjob experiment.yaml [--namespace NS] [--artifacts-pvc PVC] [--attempt N]
+    mlops rayjob experiment.yaml [--namespace NS] [--artifacts-pvc PVC] [--data-pvc PVC] [--attempt N]
                                  [--submit [--kubectl "kubectl --context X"]]
     mlops rayjob-status NAME [--namespace NS] [--kubectl CMD] [--json]
     mlops rayjob-logs   NAME [--namespace NS] [--kubectl CMD] [-f]
@@ -283,6 +283,11 @@ def cmd_resume(args: argparse.Namespace) -> int:
 
 def cmd_rayjob(args: argparse.Namespace) -> int:
     spec = _load(args.experiment)
+    if spec.dataset.name not in _DATA_PROVIDERS and not args.data_pvc:
+        raise CliError(
+            f"dataset {spec.dataset.name!r} reads files: pass --data-pvc PVC (a claim holding them, "
+            "mounted read-only at --data-path) so the in-cluster run can find its data"
+        )
     try:
         items = render_rayjob(
             spec,
@@ -291,6 +296,8 @@ def cmd_rayjob(args: argparse.Namespace) -> int:
             artifacts_pvc=args.artifacts_pvc,
             artifacts_path=args.artifacts_path,
             mlflow_uri=args.mlflow_uri or spec.tracking.uri or None,
+            data_pvc=args.data_pvc,
+            data_path=args.data_path,
         )
     except UnpinnedInputError as e:
         raise CliError(str(e)) from e
@@ -545,6 +552,9 @@ def build_parser() -> argparse.ArgumentParser:
     rj.add_argument("--attempt", type=int, default=1, help="retry counter; part of RunID and the job name")
     rj.add_argument("--artifacts-pvc", metavar="PVC", help="PersistentVolumeClaim to mount for the run bundle")
     rj.add_argument("--artifacts-path", default="/artifacts", help="mount path of that PVC inside the pods")
+    rj.add_argument("--data-pvc", metavar="PVC",
+                    help="PersistentVolumeClaim holding the dataset files (e.g. Task09_Spleen/), mounted read-only")
+    rj.add_argument("--data-path", default="/data", help="mount path of that PVC; passed as --data-root")
     rj.add_argument("--mlflow-uri", metavar="URI", help="override tracking.uri for the in-cluster run")
     rj.add_argument("--submit", action="store_true", help="kubectl apply the manifest instead of printing it")
     rj.add_argument("--kubectl", default="kubectl", help='kubectl command, e.g. "kubectl --context prod"')

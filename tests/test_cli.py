@@ -183,7 +183,7 @@ BASELINE = ROOT / "experiments/configs/swinunetr_baseline.yaml"
 
 
 def test_rayjob_renders_json_list(capsys):
-    assert main(["rayjob", str(BASELINE), "--namespace", "ml", "--artifacts-pvc", "runs"]) == 0
+    assert main(["rayjob", str(BASELINE), "--namespace", "ml", "--artifacts-pvc", "runs", "--data-pvc", "msd"]) == 0
     body = json.loads(capsys.readouterr().out)
     assert body["kind"] == "List"
     kinds = [i["kind"] for i in body["items"]]
@@ -207,7 +207,7 @@ def test_rayjob_submit_goes_through_kubectl(capsys, monkeypatch):
         return R()
 
     monkeypatch.setattr(cli.subprocess, "run", fake_run)
-    assert main(["rayjob", str(BASELINE), "--submit", "--kubectl", "kubectl --context dev"]) == 0
+    assert main(["rayjob", str(BASELINE), "--data-pvc", "msd", "--submit", "--kubectl", "kubectl --context dev"]) == 0
     assert calls == [["kubectl", "--context", "dev", "apply", "-n", "default", "-f", "-"]]
     out = capsys.readouterr().out
     assert out.strip().startswith("submitted RayJob mlops-")
@@ -617,6 +617,23 @@ def test_rayjob_logs_follows_and_passes_the_exit_code(monkeypatch):
 
 def test_rayjob_submit_says_how_to_follow_it(capsys, monkeypatch):
     _fake_kubectl(monkeypatch)
-    assert main(["rayjob", str(BASELINE), "--submit", "--namespace", "ml"]) == 0
+    assert main(["rayjob", str(BASELINE), "--data-pvc", "msd", "--submit", "--namespace", "ml"]) == 0
     out = capsys.readouterr().out
     assert "mlops rayjob-status mlops-" in out and "mlops rayjob-logs mlops-" in out and "--namespace ml" in out
+
+
+def test_rayjob_for_a_file_dataset_needs_a_data_pvc(capsys):
+    # msd-task09-spleen reads files; without a volume the in-cluster run could only fail later.
+    assert main(["rayjob", str(BASELINE)]) == 2
+    err = capsys.readouterr().err
+    assert "--data-pvc" in err and "msd-task09-spleen" in err
+
+
+def test_rayjob_data_pvc_reaches_the_manifest(capsys):
+    assert main(["rayjob", str(BASELINE), "--data-pvc", "msd", "--data-path", "/mnt/msd"]) == 0
+    job = json.loads(capsys.readouterr().out)["items"][1]
+    assert "--data-root /mnt/msd" in job["spec"]["entrypoint"]
+
+
+def test_rayjob_for_synthetic_data_needs_no_volume(capsys):
+    assert main(["rayjob", str(SMOKE)]) == 0

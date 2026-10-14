@@ -1,0 +1,11 @@
+# Code is verified through MLOPS_GIT_COMMIT, never through a repo that could drift.
+.git
+.gitignore
+.venv
+.pytest_cache
+**/__pycache__
+**/*.pyc
+artifacts
+mlruns
+tests
+scripts

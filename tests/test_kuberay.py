@@ -262,3 +262,38 @@ def test_logs_without_follow_and_exit_code_passthrough():
     kubectl = _FakeGet(returncode=1)
     assert follow_rayjob_logs("x", run=kubectl) == 1
     assert "--follow" not in kubectl.calls[0][0]
+
+
+# --- data volume: providers that read files get them from a PVC, read-only, at --data-root ---
+
+
+def _pods(job):
+    rc = job["spec"]["rayClusterSpec"]
+    return [rc["headGroupSpec"]["template"]["spec"], rc["workerGroupSpecs"][0]["template"]["spec"]]
+
+
+def test_data_pvc_is_mounted_read_only_on_every_pod(spec):
+    _, job = render_rayjob(spec, data_pvc="msd-data")
+    # The provider is built on the driver (head) and pickled to the workers with its root:
+    # both must see the files at the same path.
+    for pod in _pods(job):
+        vols = {v["name"]: v for v in pod["volumes"]}
+        assert vols["data"]["persistentVolumeClaim"] == {"claimName": "msd-data", "readOnly": True}
+        (container,) = pod["containers"]
+        mounts = {m["name"]: m for m in container["volumeMounts"]}
+        assert mounts["data"] == {"name": "data", "mountPath": "/data", "readOnly": True}
+    assert "--data-root /data" in job["spec"]["entrypoint"]
+
+
+def test_data_path_is_configurable(spec):
+    _, job = render_rayjob(spec, data_pvc="msd-data", data_path="/mnt/msd")
+    assert "--data-root /mnt/msd" in job["spec"]["entrypoint"]
+    head, _, _ = _containers(job)
+    assert {m["name"]: m["mountPath"] for m in head["volumeMounts"]}["data"] == "/mnt/msd"
+
+
+def test_no_data_pvc_no_data_volume(spec):
+    _, job = render_rayjob(spec)
+    for pod in _pods(job):
+        assert "data" not in {v["name"] for v in pod["volumes"]}
+    assert "--data-root" not in job["spec"]["entrypoint"]
