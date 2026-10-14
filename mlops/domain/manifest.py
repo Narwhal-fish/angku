@@ -9,6 +9,16 @@ from pydantic import BaseModel, ConfigDict, Field
 from mlops.domain.environment import EnvCheck, EnvironmentRecord
 
 
+class ResumePoint(BaseModel):
+    """The run was interrupted and continued from the checkpoint taken after ``epoch``."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    epoch: int = Field(ge=0)
+    # Where the resumed segment ran (it may be another machine). None = no probe given.
+    environment: EnvironmentRecord | None = None
+
+
 class RunManifest(BaseModel):
     # NaN is a real value here (a metric undefined for the whole split); plain JSON would
     # write it as null and the bundle would no longer load.
@@ -26,3 +36,6 @@ class RunManifest(BaseModel):
     environment: EnvironmentRecord | None = None
     # The served data vs dataset.snapshot. None only in bundles predating the check.
     data_snapshot: EnvCheck | None = None
+    # Every time the run was resumed from a checkpoint, in order. Empty = ran in one go.
+    # ``environment`` above describes the first segment.
+    resumes: list[ResumePoint] = Field(default_factory=list)

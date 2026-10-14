@@ -17,6 +17,8 @@ import math
 from typing import Any
 
 from mlops.application.bundle import Bundle, load_bundle
+from mlops.domain.environment import EnvironmentRecord
+from mlops.domain.manifest import ResumePoint
 from mlops.ports.artifacts import ArtifactStore
 
 REPORT = "report.md"
@@ -63,6 +65,8 @@ def _header(b: Bundle) -> str:
     ]
     if s.meta.tags:
         rows.append(("tags", ", ".join(s.meta.tags)))
+    if m.resumes:
+        rows.append(("resumed", ", ".join(_resume_point(r) for r in m.resumes)))
     rows.append(("environment", _env_verdict(b)))
     rows.append(("data", _data_verdict(b)))
     return "\n".join(lines) + "\n" + _table(("field", "value"), rows)
@@ -162,8 +166,18 @@ def _model(b: Bundle) -> str:
     return out + _table(("field", "value"), rows)
 
 
+def _resume_point(r: ResumePoint) -> str:
+    out = f"after epoch {r.epoch}"
+    if r.environment is not None:
+        out += f" (environment {_record_verdict(r.environment)})"
+    return out
+
+
 def _env_verdict(b: Bundle) -> str:
-    record = b.manifest.environment
+    return _record_verdict(b.manifest.environment)
+
+
+def _record_verdict(record: EnvironmentRecord | None) -> str:
     if record is None:
         return "not recorded"
     if record.verified:

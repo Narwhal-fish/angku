@@ -46,7 +46,9 @@ class MlflowTracker:
         self._client: MlflowClient | None = None
         self._mlflow_run_id: str | None = None
 
-    def start_run(self, *, run_id: str, experiment_id: str, spec: ExperimentSpec) -> None:
+    def start_run(
+        self, *, run_id: str, experiment_id: str, spec: ExperimentSpec, resume: bool = False
+    ) -> None:
         if self._mlflow_run_id is not None:
             raise TrackerError("a run is still active; call end_run first")
         t = spec.tracking
@@ -61,6 +63,17 @@ class MlflowTracker:
         client = MlflowClient(tracking_uri=uri)
         exp = client.get_experiment_by_name(t.experiment_name)
         mlflow_exp_id = exp.experiment_id if exp is not None else client.create_experiment(t.experiment_name)
+
+        if resume:
+            earlier = client.search_runs(
+                [mlflow_exp_id], filter_string=f"tags.`mlops.run_id` = '{run_id}'",
+                order_by=["attributes.start_time DESC"], max_results=1,
+            )
+            if earlier:
+                # Params are already there (same spec); just reopen it for the remaining epochs.
+                client.update_run(earlier[0].info.run_id, status="RUNNING")
+                self._client, self._mlflow_run_id = client, earlier[0].info.run_id
+                return
 
         run = client.create_run(
             mlflow_exp_id,

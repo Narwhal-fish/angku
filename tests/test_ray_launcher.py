@@ -161,3 +161,11 @@ def test_metrics_are_aggregated_over_every_rank(launcher):
     for key, values in per_sample.items():
         expected = values[~values.isnan()].double().mean().item()
         assert result.final_metrics[f"val/{key}"] == pytest.approx(expected, abs=1e-6), key
+
+
+@pytest.mark.parametrize("kw", [{"checkpoint_every": 1}, {"resume": True}])
+def test_checkpoint_and_resume_are_refused_for_now(launcher, kw):
+    tracker = InMemoryTracker()
+    with pytest.raises(RunnerError, match="not supported by the Ray launcher yet"):
+        launcher.launch(_spec(workers=1), data=_data(), tracker=tracker, artifacts=InMemoryArtifactStore(), **kw)
+    assert tracker.runs == []

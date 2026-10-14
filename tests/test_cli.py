@@ -396,3 +396,74 @@ def test_strict_env_runs_when_everything_verifies(tmp_path, capsys, probe, monke
     monkeypatch.setitem(cli._DATA_PROVIDERS, "synthetic-blobs", lambda: HashedBlobs(spec.dataset.snapshot))
     assert main(["run", str(SMOKE), "--tracker", "inmemory", "--strict-env"]) == 0
     assert "code.commit" not in capsys.readouterr().err
+
+
+# --- checkpoint + resume ---
+
+
+def _killed_run(tmp_path, capsys, monkeypatch, *, epochs=3, fail_at=3):
+    """`mlops run --checkpoint-every 1` that dies at epoch ``fail_at``; returns (art, run_id)."""
+    import mlops.cli as cli
+    from tests.test_checkpoint import FlakyTracker
+
+    yml = _write_yaml(tmp_path / "e.yaml", **{"training.epochs": epochs})
+    art = tmp_path / "artifacts"
+    monkeypatch.setattr(cli, "_tracker", lambda *a: FlakyTracker(fail_at))
+    assert main(["run", str(yml), "--artifacts", str(art), "--checkpoint-every", "1"]) == 1
+    monkeypatch.undo()
+    capsys.readouterr()
+    (run_dir,) = art.iterdir()
+    return art, run_dir.name
+
+
+def test_run_checkpoint_every_writes_checkpoint(tmp_path, capsys):
+    from mlops.application.bundle import CHECKPOINT
+
+    art = tmp_path / "artifacts"
+    yml = _write_yaml(tmp_path / "e.yaml", **{"training.epochs": 2})
+    assert main(["run", str(yml), "--tracker", "inmemory", "--artifacts", str(art),
+                 "--checkpoint-every", "1", "--json"]) == 0
+    run_id = json.loads(capsys.readouterr().out)["run_id"]
+    assert (art / run_id / CHECKPOINT).is_file()
+
+
+def test_run_checkpoint_every_needs_artifacts(capsys):
+    assert main(["run", str(SMOKE), "--tracker", "inmemory", "--checkpoint-every", "1"]) == 2
+    assert "--artifacts" in capsys.readouterr().err
+
+
+def test_run_checkpoint_every_refused_with_ray(tmp_path, capsys):
+    rc = main(["run", str(SMOKE), "--tracker", "inmemory", "--artifacts", str(tmp_path),
+               "--launcher", "ray", "--checkpoint-every", "1"])
+    assert rc == 2
+    assert "local launcher" in capsys.readouterr().err
+
+
+def test_resume_finishes_a_killed_run(tmp_path, capsys, monkeypatch):
+    art, run_id = _killed_run(tmp_path, capsys, monkeypatch)
+    assert main(["resume", run_id, "--artifacts", str(art), "--tracker", "inmemory", "--json"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["status"] == "FINISHED" and out["run_id"] == run_id
+    assert out["resumed_from_epoch"] == 2
+    assert len(out["history"]) == 3
+    m = json.loads((art / run_id / MANIFEST).read_text())
+    assert m["status"] == "FINISHED" and [r["epoch"] for r in m["resumes"]] == [2]
+    assert "resumed" in (art / run_id / REPORT).read_text()
+
+
+def test_resume_human_output_names_the_resume_point(tmp_path, capsys, monkeypatch):
+    art, run_id = _killed_run(tmp_path, capsys, monkeypatch)
+    assert main(["resume", run_id, "--artifacts", str(art), "--tracker", "inmemory"]) == 0
+    assert "resumed after epoch 2" in capsys.readouterr().out
+
+
+def test_resume_unknown_run_exits_2(tmp_path, capsys):
+    rc = main(["resume", "f" * 64, "--artifacts", str(tmp_path), "--tracker", "inmemory"])
+    assert rc == 2
+    assert "Traceback" not in capsys.readouterr().err
+
+
+def test_resume_finished_run_exits_2(finished_run, capsys):
+    art, run_id = finished_run
+    assert main(["resume", run_id, "--artifacts", str(art), "--tracker", "inmemory"]) == 2
+    assert "no checkpoint" in capsys.readouterr().err

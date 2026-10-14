@@ -5,7 +5,9 @@ concrete adapters (tracker, data provider, artifact store) and hands them to
     mlops id     experiment.yaml
     mlops run    experiment.yaml [--artifacts DIR] [--data-root DIR] [--tracker mlflow|inmemory]
                                  [--mlflow-uri URI] [--launcher local|ray] [--ray-address ADDR]
-                                 [--device cpu] [--attempt N] [--strict-env] [--json]
+                                 [--device cpu] [--attempt N] [--checkpoint-every N] [--strict-env] [--json]
+    mlops resume RUN_ID --artifacts DIR [--data-root DIR] [--tracker mlflow|inmemory] [--mlflow-uri URI]
+                                 [--device cpu] [--checkpoint-every N] [--json]
     mlops rayjob experiment.yaml [--namespace NS] [--artifacts-pvc PVC] [--attempt N]
                                  [--submit [--kubectl "kubectl --context X"]]
     mlops reproduce RUN_ID --artifacts DIR [--data-root DIR] [--tracker mlflow|inmemory] [--mlflow-uri URI]
@@ -43,7 +45,7 @@ from mlops.adapters.local_artifacts import LocalArtifactStore
 from mlops.adapters.local_environment import LocalEnvironmentProbe
 from mlops.adapters.synthetic_data import SyntheticBlobs
 from mlops.application import RunnerError
-from mlops.application.bundle import SPEC, load_bundle
+from mlops.application.bundle import SPEC, load_bundle, load_checkpoint
 from mlops.application.launch import Launcher, LocalLauncher
 from mlops.application.runner import verify_data
 from mlops.application.report import render_report, write_report
@@ -155,6 +157,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     spec = _load(args.experiment)
     if spec.unpinned_inputs():
         raise CliError("cannot run: unpinned inputs: " + ", ".join(spec.unpinned_inputs()))
+    _check_checkpoint_args(args)
     _discover(args.experiments)
     data = _data_provider(spec, args.data_root)
     tracker = _tracker(spec, args.tracker, args.mlflow_uri)
@@ -171,17 +174,31 @@ def cmd_run(args: argparse.Namespace) -> int:
         if problems:
             raise CliError("--strict-env: run does not verifiably match the pins:\n  " + "\n  ".join(problems))
     store = LocalArtifactStore(args.artifacts) if args.artifacts else None
+    return _launch_and_report(spec, args, launcher, store, attempt=args.attempt, probe=probe, data=data,
+                              tracker=tracker, checkpoint_every=args.checkpoint_every)
 
+
+def _check_checkpoint_args(args: argparse.Namespace) -> None:
+    if args.checkpoint_every is None:
+        return
+    if not args.artifacts:
+        raise CliError("--checkpoint-every needs --artifacts DIR to write checkpoint.pt into")
+    if getattr(args, "launcher", "local") != "local":
+        raise CliError("--checkpoint-every / resume only work with the local launcher for now")
+
+
+def _launch_and_report(
+    spec: ExperimentSpec, args: argparse.Namespace, launcher: Launcher, store: LocalArtifactStore | None,
+    *, attempt: int, **launch: Any,
+) -> int:
+    """Launch, write report.md, warn about unverified pins, print the summary. Shared by run/resume."""
     try:
-        result = launcher.launch(
-            spec, data=data, tracker=tracker, artifacts=store, attempt=args.attempt, device=args.device,
-            probe=probe,
-        )
+        result = launcher.launch(spec, artifacts=store, attempt=attempt, device=args.device, **launch)
     except (TrackerError, DataError, RegistryError, RunnerError) as e:
         raise CliError(str(e)) from e
     except Exception as e:  # training itself blew up; the FAILED bundle (if any) is already written
         if store is not None:
-            run_id = compute_run_id(compute_experiment_id(spec), spec.resources, args.attempt)
+            run_id = compute_run_id(compute_experiment_id(spec), spec.resources, attempt)
             try:
                 write_report(store, run_id)
             except ArtifactError:  # failed before the run started: no bundle to report on
@@ -190,7 +207,9 @@ def cmd_run(args: argparse.Namespace) -> int:
         return 1
     if store is not None:
         write_report(store, result.run_id)
-    checks = dict(result.environment.checks) if result.environment is not None else {}
+    # Warn about where *this* process ran: after a resume that is the latest segment.
+    env = result.resumes[-1].environment if result.resumes else result.environment
+    checks = dict(env.checks) if env is not None else {}
     if result.data_snapshot is not None:
         checks["dataset.snapshot"] = result.data_snapshot
     for problem in _unverified(checks):
@@ -200,9 +219,10 @@ def cmd_run(args: argparse.Namespace) -> int:
         "status": "FINISHED",
         "experiment_id": result.experiment_id,
         "run_id": result.run_id,
-        "attempt": args.attempt,
+        "attempt": attempt,
         "device": result.device,
-        "launcher": args.launcher,
+        "launcher": getattr(args, "launcher", "local"),
+        "resumed_from_epoch": result.resumes[-1].epoch if result.resumes else None,
         "history": result.history,
         "artifacts": str(Path(args.artifacts) / result.run_id) if args.artifacts else None,
     }
@@ -217,11 +237,34 @@ def _print_summary(spec: ExperimentSpec, s: dict[str, Any]) -> None:
     print(f"{spec.meta.name}: {s['status']}")
     print(f"  experiment_id  {s['experiment_id']}")
     print(f"  run_id         {s['run_id']}  (attempt {s['attempt']}, {s['device']}, launcher {s['launcher']})")
+    if s["resumed_from_epoch"] is not None:
+        print(f"  resumed after epoch {s['resumed_from_epoch']} from checkpoint.pt")
     for epoch, metrics in enumerate(s["history"], start=1):
         cells = "  ".join(f"{k}={v:.4f}" for k, v in metrics.items())
         print(f"  epoch {epoch:>3}  {cells}")
     if s["artifacts"]:
         print(f"  artifacts      {s['artifacts']}")
+
+
+def cmd_resume(args: argparse.Namespace) -> int:
+    store = LocalArtifactStore(args.artifacts)
+    try:
+        spec = ExperimentSpec.model_validate_json(store.get(args.run_id, SPEC))
+    except ArtifactError as e:
+        raise CliError(str(e)) from e
+    try:
+        attempt = load_checkpoint(store, args.run_id).attempt
+    except ArtifactError:
+        raise CliError(
+            f"no checkpoint for run {args.run_id}: nothing to resume "
+            "(only runs started with --checkpoint-every can be resumed)"
+        ) from None
+    _check_checkpoint_args(args)
+    _discover(args.experiments)
+    data = _data_provider(spec, args.data_root)
+    tracker = _tracker(spec, args.tracker, args.mlflow_uri)
+    return _launch_and_report(spec, args, LocalLauncher(), store, attempt=attempt, probe=_probe(), data=data,
+                              tracker=tracker, checkpoint_every=args.checkpoint_every, resume=True)
 
 
 def cmd_rayjob(args: argparse.Namespace) -> int:
@@ -340,11 +383,27 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--ray-storage", metavar="DIR", help="Ray Train storage_path for run state/checkpoints")
     run.add_argument("--device", help="torch device override, e.g. cpu")
     run.add_argument("--attempt", type=int, default=1, help="retry counter; part of RunID")
+    run.add_argument("--checkpoint-every", type=int, metavar="N",
+                     help="store the training state as checkpoint.pt every N epochs (needs --artifacts); "
+                          "makes the run resumable with `mlops resume`")
     run.add_argument("--strict-env", action="store_true",
                      help="refuse to run unless the code and image verifiably match code.commit / image_digest")
     run.add_argument("--experiments", default="experiments", help="package to discover components from")
     run.add_argument("--json", action="store_true", help="machine-readable summary on stdout")
     run.set_defaults(func=cmd_run)
+
+    rs = sub.add_parser("resume", help="continue an interrupted run from its checkpoint.pt (same run_id)")
+    rs.add_argument("run_id", help="run to continue; its checkpoint must be under --artifacts")
+    rs.add_argument("--artifacts", metavar="DIR", required=True, help="artifact root holding DIR/<run_id>/")
+    _add_data_root(rs)
+    rs.add_argument("--tracker", choices=["mlflow", "inmemory"], help="override tracking.backend")
+    rs.add_argument("--mlflow-uri", metavar="URI", help="override tracking.uri")
+    rs.add_argument("--device", help="torch device override, e.g. cpu")
+    rs.add_argument("--checkpoint-every", type=int, metavar="N",
+                    help="checkpoint interval from here on (default: the one the run was started with)")
+    rs.add_argument("--experiments", default="experiments", help="package to discover components from")
+    rs.add_argument("--json", action="store_true", help="machine-readable summary on stdout")
+    rs.set_defaults(func=cmd_resume)
 
     rj = sub.add_parser("rayjob", help="render (or submit) a KubeRay RayJob that runs the spec on Kubernetes")
     rj.add_argument("experiment", help="path to experiment.yaml")

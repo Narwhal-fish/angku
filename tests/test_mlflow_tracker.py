@@ -179,3 +179,27 @@ def test_metric_keys_and_undefined_values_reach_mlflow(spec, uri):
     assert run.data.metrics["val/dice/spleen"] == 0.75
     assert math.isnan(run.data.metrics["val/dice/liver"])
     assert run.data.params["metrics.0.name"] == "dice"
+
+
+def test_resume_reopens_the_same_mlflow_run(spec, uri):
+    tracker = MlflowTracker(uri=uri)
+    tracker.start_run(run_id="r" * 64, experiment_id="e" * 64, spec=spec)
+    tracker.log_metrics({"train/loss": 1.5}, step=1)
+    tracker.end_run("FAILED")
+
+    tracker = MlflowTracker(uri=uri)
+    tracker.start_run(run_id="r" * 64, experiment_id="e" * 64, spec=spec, resume=True)
+    tracker.log_metrics({"train/loss": 1.0}, step=2)
+    tracker.end_run("FINISHED")
+
+    run = _find(MlflowClient(uri), spec.tracking.experiment_name, "r" * 64)  # still exactly one run
+    assert run.info.status == "FINISHED"
+    history = MlflowClient(uri).get_metric_history(run.info.run_id, "train/loss")
+    assert [(m.step, m.value) for m in history] == [(1, 1.5), (2, 1.0)]
+
+
+def test_resume_without_an_earlier_mlflow_run_starts_one(spec, uri):
+    tracker = MlflowTracker(uri=uri)
+    tracker.start_run(run_id="n" * 64, experiment_id="e" * 64, spec=spec, resume=True)
+    tracker.end_run("FINISHED")
+    assert _find(MlflowClient(uri), spec.tracking.experiment_name, "n" * 64).info.status == "FINISHED"

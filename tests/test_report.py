@@ -328,3 +328,21 @@ def test_metric_never_defined_renders(spec):
     md = render_report(_fake_bundle(spec, history=[{"val/dice/1": nan}, {"val/dice/1": nan}]))
     assert "| val/dice/1 | — | — | — |" in _section(md, "Final metrics")
     assert "nan" not in md.lower()
+
+
+# --- resumed runs ---
+
+
+def test_resumed_run_says_where_it_was_resumed(spec):
+    from dataclasses import replace
+
+    from mlops.domain.manifest import ResumePoint
+
+    b = _fake_bundle(spec)
+    b = replace(b, manifest=b.manifest.model_copy(update={"resumes": [ResumePoint(epoch=40), ResumePoint(epoch=80)]}))
+    md = render_report(b)
+    assert "| resumed | after epoch 40, after epoch 80 |" in md
+
+
+def test_uninterrupted_run_has_no_resumed_row(bundle):
+    assert "| resumed |" not in render_report(bundle)

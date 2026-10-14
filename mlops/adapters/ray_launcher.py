@@ -116,7 +116,12 @@ class RayLauncher:
         attempt: int = 1,
         device: str | None = None,
         probe: EnvironmentProbe | None = None,
+        checkpoint_every: int | None = None,
+        resume: bool = False,
     ) -> RunResult:
+        if checkpoint_every or resume:
+            # Needs per-rank RNG state and Ray's own checkpoint/restore.
+            raise RunnerError("checkpoint_every / resume are not supported by the Ray launcher yet")
         experiment_id = compute_experiment_id(spec)
         run_id = compute_run_id(experiment_id, spec.resources, attempt)
         res = spec.resources

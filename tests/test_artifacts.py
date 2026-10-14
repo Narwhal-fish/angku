@@ -202,3 +202,11 @@ def test_undefined_metric_survives_the_bundle_roundtrip(store):
     save_bundle(store, spec=spec, manifest=manifest, model_state=None)
     loaded = load_bundle(store, "r").manifest.history[0]
     assert math.isnan(loaded["val/dice/1"]) and loaded["val/loss"] == 0.5
+
+
+def test_manifest_without_resumes_still_loads():
+    # Bundles written before checkpoint/resume existed have no "resumes" key.
+    m = RunManifest.model_validate_json(
+        '{"experiment_id": "e", "run_id": "r", "attempt": 1, "status": "FINISHED", "device": "cpu"}'
+    )
+    assert m.resumes == []

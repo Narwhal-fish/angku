@@ -29,9 +29,16 @@ class InMemoryTracker:
             raise RuntimeError("no active run; call start_run first")
         return self._active
 
-    def start_run(self, *, run_id: str, experiment_id: str, spec: ExperimentSpec) -> None:
+    def start_run(
+        self, *, run_id: str, experiment_id: str, spec: ExperimentSpec, resume: bool = False
+    ) -> None:
         if self._active is not None:
             raise RuntimeError(f"run {self._active.run_id} is still active")
+        earlier = [r for r in self.runs if r.run_id == run_id] if resume else []
+        if earlier:
+            self._active = earlier[-1]
+            self._active.status = None
+            return
         self._active = RecordedRun(run_id=run_id, experiment_id=experiment_id, spec=spec)
         self.runs.append(self._active)
 

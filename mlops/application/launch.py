@@ -28,13 +28,19 @@ class Launcher(Protocol):
         attempt: int = 1,
         device: str | None = None,
         probe: EnvironmentProbe | None = None,
+        checkpoint_every: int | None = None,
+        resume: bool = False,
     ) -> RunResult: ...
 
 
 class LocalLauncher:
     """world_size 1, this process."""
 
-    def launch(self, spec, *, data, tracker, artifacts=None, attempt=1, device=None, probe=None) -> RunResult:
+    def launch(
+        self, spec, *, data, tracker, artifacts=None, attempt=1, device=None, probe=None,
+        checkpoint_every=None, resume=False,
+    ) -> RunResult:
         return run_experiment(
-            spec, data=data, tracker=tracker, artifacts=artifacts, attempt=attempt, device=device, probe=probe
+            spec, data=data, tracker=tracker, artifacts=artifacts, attempt=attempt, device=device, probe=probe,
+            checkpoint_every=checkpoint_every, resume=resume,
         )

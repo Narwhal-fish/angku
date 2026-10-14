@@ -19,7 +19,12 @@ class TrackerError(Exception):
 
 
 class Tracker(Protocol):
-    def start_run(self, *, run_id: str, experiment_id: str, spec: ExperimentSpec) -> None: ...
+    def start_run(
+        self, *, run_id: str, experiment_id: str, spec: ExperimentSpec, resume: bool = False
+    ) -> None:
+        """Open a run. ``resume=True``: continue the backend's earlier run with this ``run_id``
+        (a resumed checkpoint) instead of opening a second one; start fresh if there is none."""
+        ...
 
     def log_metrics(self, metrics: Mapping[str, float], *, step: int) -> None: ...
 
