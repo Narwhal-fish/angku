@@ -215,3 +215,86 @@ def test_rayjob_unpinned_spec_exits_2(tmp_path, capsys):
     path = _write_yaml(tmp_path / "e.yaml", **{"environment.image_digest": None})
     assert main(["rayjob", str(path)]) == 2
     assert "image_digest" in capsys.readouterr().err
+
+
+# --- reproduce ---
+#
+# `mlops reproduce RUN_ID --artifacts DIR`: re-run the bundle and compare.
+# Exit 0 reproduced / 1 mismatch (details printed) / 2 bad input.
+
+
+@pytest.fixture
+def finished_run(tmp_path, capsys):
+    """A FINISHED bundle under tmp_path/artifacts; returns (artifacts_dir, run_id)."""
+    art = tmp_path / "artifacts"
+    assert main(["run", str(SMOKE), "--tracker", "inmemory", "--artifacts", str(art), "--json"]) == 0
+    return art, json.loads(capsys.readouterr().out)["run_id"]
+
+
+def test_reproduce_intact_bundle_exits_0(finished_run, capsys):
+    art, run_id = finished_run
+    rc = main(["reproduce", run_id, "--artifacts", str(art), "--tracker", "inmemory"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "REPRODUCED" in out and run_id in out
+    for check in ("run_id", "history", "weights"):
+        assert check in out
+
+
+def test_reproduce_json_output(finished_run, capsys):
+    art, run_id = finished_run
+    rc = main(["reproduce", run_id, "--artifacts", str(art), "--tracker", "inmemory", "--json"])
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is True
+    assert payload["run_id"] == run_id
+    assert payload["checks"] == {"run_id": True, "history": True, "weights": True}
+    assert payload["mismatches"] == []
+
+
+def test_reproduce_tampered_bundle_exits_1_and_names_the_mismatch(finished_run, capsys):
+    art, run_id = finished_run
+    manifest = art / run_id / MANIFEST
+    m = json.loads(manifest.read_text())
+    m["history"][0]["train/loss"] += 1.0
+    manifest.write_text(json.dumps(m))
+
+    rc = main(["reproduce", run_id, "--artifacts", str(art), "--tracker", "inmemory"])
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert "NOT REPRODUCED" in out
+    assert "history" in out and "train/loss" in out
+
+
+def test_reproduce_atol_is_forwarded(finished_run, capsys):
+    import torch
+
+    art, run_id = finished_run
+    path = art / run_id / MODEL
+    state = torch.load(path, map_location="cpu", weights_only=True)
+    key = next(iter(state))
+    state[key] = state[key] + 1e-7
+    torch.save(state, path)
+
+    assert main(["reproduce", run_id, "--artifacts", str(art), "--tracker", "inmemory"]) == 1
+    capsys.readouterr()
+    assert main(["reproduce", run_id, "--artifacts", str(art), "--tracker", "inmemory", "--atol", "1e-5"]) == 0
+
+
+def test_reproduce_unknown_run_id_exits_2(tmp_path, capsys):
+    rc = main(["reproduce", "deadbeef", "--artifacts", str(tmp_path), "--tracker", "inmemory"])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "deadbeef" in err and "Traceback" not in err
+
+
+def test_reproduce_failed_run_exits_2(tmp_path, capsys):
+    path = _write_yaml(tmp_path / "e.yaml", **{"model.params": {"in_channels": 3, "out_channels": 2, "hidden": 4, "spatial_dims": 3}})
+    art = tmp_path / "artifacts"
+    assert main(["run", str(path), "--tracker", "inmemory", "--artifacts", str(art)]) == 1
+    capsys.readouterr()
+    (run_dir,) = art.iterdir()
+
+    rc = main(["reproduce", run_dir.name, "--artifacts", str(art), "--tracker", "inmemory"])
+    assert rc == 2
+    assert "FAILED" in capsys.readouterr().err

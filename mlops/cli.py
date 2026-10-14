@@ -8,8 +8,10 @@ concrete adapters (tracker, data provider, artifact store) and hands them to
                                  [--device cpu] [--attempt N] [--json]
     mlops rayjob experiment.yaml [--namespace NS] [--artifacts-pvc PVC] [--attempt N]
                                  [--submit [--kubectl "kubectl --context X"]]
+    mlops reproduce RUN_ID --artifacts DIR [--tracker mlflow|inmemory] [--mlflow-uri URI]
+                                 [--device cpu] [--atol X] [--json]
 
-Exit codes: 0 ok, 1 training failed, 2 bad input (yaml, pins, wiring).
+Exit codes: 0 ok, 1 training failed / bundle not reproduced, 2 bad input (yaml, pins, wiring).
 """
 
 from __future__ import annotations
@@ -24,14 +26,18 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from mlops.adapters.inmemory_artifacts import InMemoryArtifactStore
 from mlops.adapters.inmemory_tracker import InMemoryTracker
 from mlops.adapters.kuberay import KubeRayError, render_rayjob, submit_rayjob
 from mlops.adapters.local_artifacts import LocalArtifactStore
 from mlops.adapters.synthetic_data import SyntheticBlobs
 from mlops.application import RunnerError
+from mlops.application.bundle import SPEC
 from mlops.application.launch import Launcher, LocalLauncher
+from mlops.application.reproduce import ReproduceError, ReproduceReport, reproduce_run
 from mlops.config import ConfigError, load_experiment_yaml
 from mlops.domain import ExperimentSpec, UnpinnedInputError, compute_experiment_id
+from mlops.ports.artifacts import ArtifactError
 from mlops.ports.data import DataError, DataProvider
 from mlops.ports.tracking import Tracker, TrackerError
 from mlops.registry import RegistryError, discover
@@ -189,6 +195,44 @@ def cmd_rayjob(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_reproduce(args: argparse.Namespace) -> int:
+    store = LocalArtifactStore(args.artifacts)
+    try:
+        spec = ExperimentSpec.model_validate_json(store.get(args.run_id, SPEC))
+    except ArtifactError as e:
+        raise CliError(str(e)) from e
+    _discover(args.experiments)
+    data = _data_provider(spec)
+    tracker = _tracker(spec, args.tracker, args.mlflow_uri)
+
+    try:
+        report = reproduce_run(
+            store, args.run_id, data=data, tracker=tracker, scratch=InMemoryArtifactStore(),
+            device=args.device, atol=args.atol,
+        )
+    except (ReproduceError, ArtifactError, TrackerError, DataError, RegistryError, RunnerError) as e:
+        raise CliError(str(e)) from e
+    except Exception as e:  # the replay itself blew up: environment, not evidence
+        print(f"replay FAILED: {type(e).__name__}: {e}", file=sys.stderr)
+        return 1
+
+    if args.json:
+        print(json.dumps(report.to_dict(), indent=2))
+    else:
+        _print_report(spec, report)
+    return 0 if report.ok else 1
+
+
+def _print_report(spec: ExperimentSpec, r: ReproduceReport) -> None:
+    print(f"{spec.meta.name}: {'REPRODUCED' if r.ok else 'NOT REPRODUCED'}")
+    print(f"  experiment_id  {r.experiment_id}")
+    print(f"  run_id         {r.run_id}")
+    for check, passed in r.checks.items():
+        print(f"  {check:<14} {'ok' if passed else 'MISMATCH'}")
+    for m in r.mismatches:
+        print(f"    {m.check}: {m.detail}")
+
+
 # -- entry point ---------------------------------------------------------------
 
 
@@ -225,6 +269,18 @@ def build_parser() -> argparse.ArgumentParser:
     rj.add_argument("--submit", action="store_true", help="kubectl apply the manifest instead of printing it")
     rj.add_argument("--kubectl", default="kubectl", help='kubectl command, e.g. "kubectl --context prod"')
     rj.set_defaults(func=cmd_rayjob)
+
+    rp = sub.add_parser("reproduce", help="re-run a bundle and check run_id, history and weights match")
+    rp.add_argument("run_id", help="run to verify; its bundle must be under --artifacts")
+    rp.add_argument("--artifacts", metavar="DIR", required=True, help="artifact root holding DIR/<run_id>/")
+    rp.add_argument("--tracker", choices=["mlflow", "inmemory"], help="where the replay is recorded")
+    rp.add_argument("--mlflow-uri", metavar="URI", help="override tracking.uri")
+    rp.add_argument("--device", help="torch device override, e.g. cpu")
+    rp.add_argument("--atol", type=float, default=0.0,
+                    help="weight tolerance; 0 (default) = bit-exact, >0 = allclose for cross-launcher checks")
+    rp.add_argument("--experiments", default="experiments", help="package to discover components from")
+    rp.add_argument("--json", action="store_true", help="machine-readable report on stdout")
+    rp.set_defaults(func=cmd_reproduce)
     return p
 
 
