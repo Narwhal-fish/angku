@@ -290,3 +290,41 @@ def test_environment_section_lists_the_data_check(spec):
 def test_old_bundle_without_data_check_says_not_recorded(spec):
     header = render_report(_fake_bundle(spec)).split("\n## ", 1)[0]
     assert "| data | not recorded |" in header
+
+
+# --- validation metrics ---
+
+
+def test_metrics_are_listed_in_the_experiment_section(spec):
+    from mlops.domain.experiment import Metric
+
+    spec = spec.model_copy(update={"metrics": [Metric(name="dice", params={"include_background": False})]})
+    body = _section(render_report(_fake_bundle(spec)), "Experiment")
+    assert "dice" in body and "include_background" in body
+
+
+def test_no_metrics_says_so(spec):
+    body = _section(render_report(_fake_bundle(spec)), "Experiment")
+    assert "| metrics | val/loss only |" in body
+
+
+def test_undefined_metric_values_render_as_dash(spec):
+    nan = float("nan")
+    history = [
+        {"val/dice/1": nan, "val/loss": 1.0},
+        {"val/dice/1": 0.5, "val/loss": 0.9},
+        {"val/dice/1": 0.7, "val/loss": 0.8},
+    ]
+    md = render_report(_fake_bundle(spec, history=history))
+    final = _section(md, "Final metrics")
+    assert "| val/dice/1 | 0.7 | 0.5 (epoch 2) | 0.7 (epoch 3) |" in final
+    curves = _section(md, "Training curves")
+    assert "| 1 | — | 1 |" in curves
+    assert "nan" not in md.lower()
+
+
+def test_metric_never_defined_renders(spec):
+    nan = float("nan")
+    md = render_report(_fake_bundle(spec, history=[{"val/dice/1": nan}, {"val/dice/1": nan}]))
+    assert "| val/dice/1 | — | — | — |" in _section(md, "Final metrics")
+    assert "nan" not in md.lower()

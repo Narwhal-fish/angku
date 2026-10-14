@@ -57,6 +57,11 @@ loss:
   name: dice_ce
   params: {to_onehot_y: true, softmax: true}
 
+# Validation metrics beyond val/loss, logged as val/<key>. Background is not scored.
+metrics:
+  - name: dice
+    params: {include_background: false, class_names: [background, spleen]}
+
 resources:
   gpu: 1
   cpu: 8

@@ -364,3 +364,96 @@ def test_manifest_written_before_environment_records_still_loads():
 
     old = '{"experiment_id": "e", "run_id": "r", "attempt": 1, "status": "FINISHED", "device": "cpu", "history": []}'
     assert RunManifest.model_validate_json(old).environment is None
+
+
+# --- validation metrics (METRICS registry) ---
+
+
+def _with_metrics(spec, metrics):
+    return load_experiment_dict({**spec.model_dump(), "metrics": metrics})
+
+
+def test_metrics_are_logged_under_val_prefix(spec):
+    spec = _with_metrics(spec, [{"name": "dice", "params": {"class_names": ["bg", "blob"]}}])
+    tracker = InMemoryTracker()
+    result = run_experiment(spec, data=_data(), tracker=tracker)
+    assert set(result.final_metrics) == {
+        "train/loss", "val/loss", "val/dice/bg", "val/dice/blob", "val/dice/mean",
+    }
+    assert all(0.0 <= result.final_metrics[k] <= 1.0 for k in result.final_metrics if "dice" in k)
+    assert tracker.runs[0].metrics == [(1, result.history[0])]
+
+
+def test_metrics_do_not_change_training(spec):
+    plain = run_experiment(spec, data=_data(), tracker=InMemoryTracker())
+    measured = run_experiment(
+        _with_metrics(spec, [{"name": "dice", "params": {}}]), data=_data(), tracker=InMemoryTracker()
+    )
+    assert measured.history[0]["train/loss"] == plain.history[0]["train/loss"]
+    assert measured.history[0]["val/loss"] == plain.history[0]["val/loss"]
+
+
+def test_metric_mean_is_over_samples_where_defined(spec):
+    from mlops.registry import METRICS
+
+    class _NoParams(Params):
+        pass
+
+    if "_test_nan_half" not in METRICS:
+
+        @METRICS.register("_test_nan_half", params=_NoParams)
+        def _nan_half(p: _NoParams):
+            # sample i -> value i, except odd positions in the batch are undefined
+            def metric(logits, target):
+                n = logits.shape[0]
+                v = torch.arange(n, dtype=torch.float64)
+                v[1::2] = float("nan")
+                return {"half": v}
+
+            return metric
+
+    spec = _with_metrics(spec, [{"name": "_test_nan_half", "params": {}}])
+    data = SyntheticBlobs(n_train=2, n_val=4, shape=(8, 8, 8), in_channels=1, num_classes=2)
+    result = run_experiment(spec, data=data, tracker=InMemoryTracker())
+    # batch_size 2 -> two val batches, values [0, nan] and [0, nan] -> mean of the defined ones
+    assert result.final_metrics["val/half"] == 0.0
+
+
+def test_metric_undefined_everywhere_is_nan(spec):
+    from mlops.registry import METRICS
+
+    class _NoParams(Params):
+        pass
+
+    if "_test_all_nan" not in METRICS:
+
+        @METRICS.register("_test_all_nan", params=_NoParams)
+        def _all_nan(p: _NoParams):
+            return lambda logits, target: {"never": torch.full((logits.shape[0],), float("nan"))}
+
+    spec = _with_metrics(spec, [{"name": "_test_all_nan", "params": {}}])
+    result = run_experiment(spec, data=_data(), tracker=InMemoryTracker())
+    assert math.isnan(result.final_metrics["val/never"])
+
+
+def test_metrics_without_val_split_are_refused(spec):
+    spec = _with_metrics(spec, [{"name": "dice", "params": {}}])
+    data = SyntheticBlobs(n_train=2, n_val=0, shape=(8, 8, 8), in_channels=1, num_classes=2)
+    tracker = InMemoryTracker()
+    with pytest.raises(RunnerError, match="metrics need a validation split"):
+        run_experiment(spec, data=data, tracker=tracker)
+    assert tracker.runs == []
+
+
+def test_metric_key_clash_is_refused(spec):
+    spec = _with_metrics(spec, [{"name": "dice", "params": {}}, {"name": "dice", "params": {}}])
+    with pytest.raises(RunnerError, match="dice/0"):
+        run_experiment(spec, data=_data(), tracker=InMemoryTracker())
+
+
+def test_unknown_metric_name_is_refused(spec):
+    from mlops.registry import RegistryError
+
+    spec = _with_metrics(spec, [{"name": "dcie", "params": {}}])
+    with pytest.raises(RegistryError, match="unknown metric 'dcie'"):
+        run_experiment(spec, data=_data(), tracker=InMemoryTracker())

@@ -139,3 +139,25 @@ def test_wrong_data_never_starts_a_ray_run(launcher):
     with pytest.raises(DataError, match="dataset.snapshot"):
         launcher.launch(spec, data=HashedBlobs(B), tracker=tracker)
     assert tracker.runs == []
+
+
+def test_metrics_are_aggregated_over_every_rank(launcher):
+    from mlops.registry import METRICS, MODELS
+
+    spec = load_experiment_dict(
+        {**_spec(workers=2).model_dump(), "metrics": [{"name": "dice", "params": {}}]}
+    )
+    store = InMemoryArtifactStore()
+    result = launcher.launch(spec, data=_data(), tracker=InMemoryTracker(), artifacts=store)
+
+    # Recompute on the driver over the whole val split with the final weights: each rank only
+    # saw half of it, so this matches only if the per-rank sums were all-reduced.
+    model = MODELS.build(spec.model.name, spec.model.params)
+    model.load_state_dict(load_bundle(store, result.run_id).model_state)
+    model.eval()
+    x, y = _data().load(spec.dataset, spec.preprocessing).val.tensors
+    with torch.no_grad():
+        per_sample = METRICS.build("dice", {})(model(x), y)
+    for key, values in per_sample.items():
+        expected = values[~values.isnan()].double().mean().item()
+        assert result.final_metrics[f"val/{key}"] == pytest.approx(expected, abs=1e-6), key

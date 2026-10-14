@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import os
 import random
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 
 import torch
@@ -34,10 +34,12 @@ from mlops.ports.artifacts import ArtifactStore
 from mlops.ports.data import DataError, DataProvider, Sample
 from mlops.ports.environment import EnvironmentProbe
 from mlops.ports.tracking import RunStatus, Tracker
-from mlops.registry import AUGMENTATIONS, LOSSES, MODELS
+from mlops.registry import AUGMENTATIONS, LOSSES, METRICS, MODELS
 
 # An augmentation is a callable applied to one on-device batch: (inputs, targets) -> (inputs, targets).
 Augment = Callable[[Tensor, Tensor], tuple[Tensor, Tensor]]
+# A validation metric: (logits, targets) -> {key: per-sample values (N,)}, NaN = undefined there.
+Metric = Callable[[Tensor, Tensor], dict[str, Tensor]]
 
 _OPTIMIZERS: dict[str, type[torch.optim.Optimizer]] = {
     "adam": torch.optim.Adam,
@@ -55,7 +57,7 @@ class RunResult:
     experiment_id: str
     run_id: str
     device: str
-    # One entry per epoch, in order: {"train/loss": ..., "val/loss": ...}.
+    # One entry per epoch, in order: {"train/loss": ..., "val/loss": ..., "val/<metric key>": ...}.
     history: list[dict[str, float]] = field(default_factory=list)
     environment: EnvironmentRecord | None = None
     data_snapshot: EnvCheck | None = None
@@ -184,18 +186,49 @@ def _train_epoch(
     return _mean_across_ranks(total, count, device)
 
 
+def _nanmean_across_ranks(sums: dict[str, list[float]], device: torch.device) -> dict[str, float]:
+    """``{key: [sum, count]}`` -> mean per key over every rank; NaN when no rank had a defined value.
+
+    One all_reduce for all keys, in sorted order so every rank packs the tensor identically.
+    """
+    keys = sorted(sums)
+    if torch.distributed.is_available() and torch.distributed.is_initialized() and keys:
+        t = torch.tensor([sums[k] for k in keys], dtype=torch.float64, device=device)
+        torch.distributed.all_reduce(t)
+        sums = {k: [float(t[i, 0]), float(t[i, 1])] for i, k in enumerate(keys)}
+    return {k: sums[k][0] / sums[k][1] if sums[k][1] else float("nan") for k in keys}
+
+
 @torch.no_grad()
 def _eval_epoch(
-    model: nn.Module, loss_fn: nn.Module, loader: DataLoader[Sample], device: torch.device
-) -> float:
+    model: nn.Module,
+    loss_fn: nn.Module,
+    loader: DataLoader[Sample],
+    device: torch.device,
+    metrics: Sequence[Metric] = (),
+) -> dict[str, float]:
     model.eval()
     total, count = 0.0, 0
+    sums: dict[str, list[float]] = {}
     for x, y in loader:
         x, y = x.to(device), y.to(device)
-        loss = loss_fn(model(x), y)
-        total += float(loss) * x.shape[0]
+        logits = model(x)
+        total += float(loss_fn(logits, y)) * x.shape[0]
         count += x.shape[0]
-    return _mean_across_ranks(total, count, device)
+        batch: dict[str, Tensor] = {}
+        for metric in metrics:
+            for key, values in metric(logits, y).items():
+                if key in batch or key == "loss":
+                    raise RunnerError(f"two metrics both produce val/{key}; give them distinct names")
+                batch[key] = values
+        for key, values in batch.items():
+            defined = values[~values.isnan()]
+            acc = sums.setdefault(key, [0.0, 0.0])
+            acc[0] += float(defined.double().sum())
+            acc[1] += defined.numel()
+    out = {"val/loss": _mean_across_ranks(total, count, device)}
+    out.update({f"val/{k}": v for k, v in _nanmean_across_ranks(sums, device).items()})
+    return out
 
 
 # -- per-worker loop -----------------------------------------------------------
@@ -238,10 +271,16 @@ def train_worker(
     if isinstance(loss_fn, nn.Module):
         loss_fn = loss_fn.to(device)
     augments: list[Augment] = [AUGMENTATIONS.build(a.name, a.params) for a in spec.augmentation]
+    metrics: list[Metric] = [METRICS.build(m.name, m.params) for m in spec.metrics]
     optimizer = build_optimizer(spec.training, model.parameters())
     trained = wrap_model(model) if wrap_model is not None else model
 
     splits = data.load(spec.dataset, spec.preprocessing)
+    if metrics and splits.val is None:
+        raise RunnerError(
+            f"metrics need a validation split, but {spec.dataset.name!r} served none; "
+            "drop `metrics` from the spec or serve a val split"
+        )
     bs, seed = spec.per_worker_batch_size(), spec.training.seed
     train_loader = _loader(splits.train, batch_size=bs, shuffle=True, seed=seed, worker=worker)
     val_loader = (
@@ -259,12 +298,12 @@ def train_worker(
     history: list[dict[str, float]] = []
     for epoch in range(1, spec.training.epochs + 1):
         _set_epoch(train_loader, epoch)
-        metrics = {"train/loss": _train_epoch(trained, loss_fn, optimizer, train_loader, augments, device)}
+        row = {"train/loss": _train_epoch(trained, loss_fn, optimizer, train_loader, augments, device)}
         if val_loader is not None:
-            metrics["val/loss"] = _eval_epoch(trained, loss_fn, val_loader, device)
-        history.append(metrics)
+            row.update(_eval_epoch(trained, loss_fn, val_loader, device, metrics))
+        history.append(row)
         if on_epoch is not None:
-            on_epoch(epoch, metrics)
+            on_epoch(epoch, row)
     return model, history
 
 

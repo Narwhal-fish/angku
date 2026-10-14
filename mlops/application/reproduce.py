@@ -11,6 +11,7 @@ that itself blows up propagates as-is: a broken environment is not a mismatch.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -121,7 +122,7 @@ def _check_history(original: Bundle, replay: Bundle) -> list[Mismatch]:
             out.append(Mismatch("history", f"epoch {epoch}: metrics {sorted(ea)} vs {sorted(eb)}"))
             continue
         for k in sorted(ea):
-            if ea[k] != eb[k]:
+            if ea[k] != eb[k] and not (math.isnan(ea[k]) and math.isnan(eb[k])):
                 out.append(Mismatch("history", f"epoch {epoch}: {k} {ea[k]!r} vs replay {eb[k]!r}"))
     return out
 

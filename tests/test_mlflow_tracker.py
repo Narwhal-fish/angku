@@ -19,7 +19,7 @@ from mlflow import MlflowClient  # noqa: E402
 from mlops.adapters.mlflow_tracker import MlflowTracker  # noqa: E402
 from mlops.adapters.synthetic_data import SyntheticBlobs  # noqa: E402
 from mlops.application import run_experiment  # noqa: E402
-from mlops.config import load_experiment_yaml  # noqa: E402
+from mlops.config import load_experiment_dict, load_experiment_yaml  # noqa: E402
 from mlops.ports.tracking import TrackerError  # noqa: E402
 from mlops.registry import discover  # noqa: E402
 
@@ -164,3 +164,18 @@ def test_importing_the_core_does_not_import_mlflow():
         "assert 'mlflow' not in sys.modules, 'mlflow leaked into the core import graph'"
     )
     subprocess.run([sys.executable, "-c", code], check=True, cwd=Path(__file__).parent.parent)
+
+
+def test_metric_keys_and_undefined_values_reach_mlflow(spec, uri):
+    import math
+
+    spec = load_experiment_dict({**spec.model_dump(), "metrics": [{"name": "dice", "params": {}}]})
+    tracker = MlflowTracker(uri=uri)
+    tracker.start_run(run_id="r" * 64, experiment_id="e" * 64, spec=spec)
+    tracker.log_metrics({"val/dice/spleen": 0.75, "val/dice/liver": float("nan")}, step=1)
+    tracker.end_run("FINISHED")
+
+    run = _find(MlflowClient(uri), spec.tracking.experiment_name, "r" * 64)
+    assert run.data.metrics["val/dice/spleen"] == 0.75
+    assert math.isnan(run.data.metrics["val/dice/liver"])
+    assert run.data.params["metrics.0.name"] == "dice"

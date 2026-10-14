@@ -117,6 +117,11 @@ class Loss(_Strict):
     params: dict[str, Any] = Field(default_factory=dict)
 
 
+class Metric(_Strict):
+    name: str
+    params: dict[str, Any] = Field(default_factory=dict)
+
+
 class Resources(_Strict):
     """Hardware allocation. Part of RunID only, never ExperimentID.
 
@@ -149,6 +154,9 @@ class ExperimentSpec(_Strict):
     training: Training
     augmentation: list[Augmentation] = Field(default_factory=list)
     loss: Loss
+    # Validation metrics beyond val/loss. They never touch the weights, but they shape the
+    # history a bundle promises to reproduce, so they are in the fingerprint (when present).
+    metrics: list[Metric] = Field(default_factory=list)
     resources: Resources
     tracking: Tracking = Field(default_factory=Tracking)
 
@@ -182,10 +190,11 @@ class ExperimentSpec(_Strict):
         """The exact subset of the spec that defines the scientific experiment.
 
         Includes: code commit, image digest, dataset name+snapshot, preprocessing,
-        model, training (incl. seed), augmentation, loss.
+        model, training (incl. seed), augmentation, loss, metrics (only when non-empty,
+        so ids from before the field existed are unchanged).
         Excludes: meta, image tag, dataset version label, resources, tracking.
         """
-        return {
+        fp: dict[str, Any] = {
             "code": {"commit": self.code.commit},
             "environment": {"image_digest": self.environment.image_digest},
             "dataset": {"name": self.dataset.name, "snapshot": self.dataset.snapshot},
@@ -195,3 +204,6 @@ class ExperimentSpec(_Strict):
             "augmentation": [a.model_dump() for a in self.augmentation],
             "loss": self.loss.model_dump(),
         }
+        if self.metrics:
+            fp["metrics"] = [m.model_dump() for m in self.metrics]
+        return fp

@@ -186,3 +186,19 @@ def test_no_store_means_nothing_is_written(spec):
 def test_load_bundle_unknown_run(store):
     with pytest.raises(ArtifactError):
         load_bundle(store, "nope")
+
+
+def test_undefined_metric_survives_the_bundle_roundtrip(store):
+    # NaN = "metric undefined" (e.g. Dice on an absent class); plain JSON would turn it into null.
+    import math
+
+    from mlops.application.bundle import save_bundle
+
+    spec = load_experiment_yaml(CONFIGS / "tiny_cnn_smoke.yaml")
+    manifest = RunManifest(
+        experiment_id="e", run_id="r", attempt=1, status="FAILED", device="cpu",
+        history=[{"val/dice/1": float("nan"), "val/loss": 0.5}],
+    )
+    save_bundle(store, spec=spec, manifest=manifest, model_state=None)
+    loaded = load_bundle(store, "r").manifest.history[0]
+    assert math.isnan(loaded["val/dice/1"]) and loaded["val/loss"] == 0.5

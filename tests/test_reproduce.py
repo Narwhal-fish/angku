@@ -238,3 +238,24 @@ def test_replay_failure_propagates_and_is_not_reported_as_a_mismatch(spec, store
         reproduce_run(
             store, run_id, data=ExplodingLoader(), tracker=InMemoryTracker(), scratch=InMemoryArtifactStore()
         )
+
+
+def test_undefined_metric_on_both_sides_is_not_a_mismatch(spec, store):
+    from mlops.config import load_experiment_dict
+    from mlops.registry import METRICS, Params
+
+    class _NoParams(Params):
+        pass
+
+    if "_test_reproduce_nan" not in METRICS:
+
+        @METRICS.register("_test_reproduce_nan", params=_NoParams)
+        def _nan(p: _NoParams):
+            return lambda logits, target: {"never": torch.full((logits.shape[0],), float("nan"))}
+
+    spec = load_experiment_dict(
+        {**spec.model_dump(), "metrics": [{"name": "_test_reproduce_nan", "params": {}}]}
+    )
+    run_id = run_experiment(spec, data=_data(), tracker=InMemoryTracker(), artifacts=store).run_id
+    report = _reproduce(store, run_id)
+    assert report.ok, report.mismatches

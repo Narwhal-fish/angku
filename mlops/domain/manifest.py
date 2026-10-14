@@ -10,7 +10,9 @@ from mlops.domain.environment import EnvCheck, EnvironmentRecord
 
 
 class RunManifest(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    # NaN is a real value here (a metric undefined for the whole split); plain JSON would
+    # write it as null and the bundle would no longer load.
+    model_config = ConfigDict(frozen=True, extra="forbid", ser_json_inf_nan="constants")
 
     experiment_id: str
     run_id: str

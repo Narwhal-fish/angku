@@ -13,6 +13,7 @@ host, and diffable between runs.
 from __future__ import annotations
 
 import json
+import math
 from typing import Any
 
 from mlops.application.bundle import Bundle, load_bundle
@@ -74,13 +75,16 @@ def _final_metrics(b: Bundle) -> str:
         return out + "No epoch completed."
     rows = []
     for k in _metric_names(history):
-        series = [(i, e[k]) for i, e in enumerate(history, start=1) if k in e]
+        # NaN = undefined that epoch (e.g. Dice of a class absent from every val label).
+        series = [(i, e[k]) for i, e in enumerate(history, start=1) if k in e and not math.isnan(e[k])]
+        if not series:
+            rows.append((k, "—", "—", "—"))
+            continue
         lo = min(series, key=lambda p: p[1])
         hi = max(series, key=lambda p: p[1])
-        final = history[-1].get(k)
         rows.append((
             k,
-            _num(final) if final is not None else "—",
+            _num(history[-1].get(k)),
             f"{_num(lo[1])} (epoch {lo[0]})",
             f"{_num(hi[1])} (epoch {hi[0]})",
         ))
@@ -95,10 +99,11 @@ def _curves(b: Bundle) -> str:
     names = _metric_names(history)
     sparks = []
     for k in names:
-        values = [e[k] for e in history if k in e]
-        sparks.append(f"    {k:<{max(map(len, names))}}  {_sparkline(values)}  "
-                      f"{_num(values[0])} → {_num(values[-1])}")
-    rows = [(str(i), *(_num(e[k]) if k in e else "—" for k in names)) for i, e in enumerate(history, start=1)]
+        values = [e[k] for e in history if k in e and not math.isnan(e[k])]
+        if values:
+            sparks.append(f"    {k:<{max(map(len, names))}}  {_sparkline(values)}  "
+                          f"{_num(values[0])} → {_num(values[-1])}")
+    rows = [(str(i), *(_num(e.get(k)) for k in names)) for i, e in enumerate(history, start=1)]
     return out + "\n".join(sparks) + "\n\n" + _table(("epoch", *names), rows)
 
 
@@ -115,6 +120,10 @@ def _experiment(b: Bundle) -> str:
         ("preprocessing", _json(s.preprocessing)),
         ("model", f"{s.model.name} {_json(s.model.params)}"),
         ("loss", f"{s.loss.name} {_json(s.loss.params)}"),
+        *(
+            [(f"metric {i}", f"{m.name} {_json(m.params)}") for i, m in enumerate(s.metrics, start=1)]
+            or [("metrics", "val/loss only")]
+        ),
         ("optimizer", t.optimizer),
         ("learning_rate", _num(t.learning_rate)),
         ("epochs", str(t.epochs)),
@@ -241,8 +250,9 @@ def _sparkline(values: list[float]) -> str:
     return "".join(_SPARKS[min(top, int((v - lo) / (hi - lo) * top))] for v in values)
 
 
-def _num(v: float) -> str:
-    return f"{v:.6g}"
+def _num(v: float | None) -> str:
+    """Missing or undefined (NaN) values render as a dash."""
+    return "—" if v is None or math.isnan(v) else f"{v:.6g}"
 
 
 def _json(v: Any) -> str:

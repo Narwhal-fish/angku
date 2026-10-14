@@ -197,3 +197,25 @@ def test_training_deterministic_defaults_on_and_is_part_of_experiment_id(raw):
     off = copy.deepcopy(raw)
     off["training"]["deterministic"] = False
     assert compute_experiment_id(spec) != compute_experiment_id(load_experiment_dict(off))
+
+
+def test_metrics_default_empty_and_old_ids_unchanged(raw):
+    raw.pop("metrics", None)
+    spec = load_experiment_dict(raw)
+    assert spec.metrics == []
+    # Absent metrics stay out of the fingerprint, so ids from before the field existed hold.
+    assert "metrics" not in spec.fingerprint()
+
+
+def test_metrics_are_part_of_experiment_id(raw):
+    raw["metrics"] = [{"name": "dice", "params": {"include_background": False}}]
+    a = load_experiment_dict(raw)
+    raw["metrics"][0]["params"]["include_background"] = True
+    b = load_experiment_dict(raw)
+    assert compute_experiment_id(a) != compute_experiment_id(b)
+
+
+def test_metrics_entry_typo_rejected(raw):
+    raw["metrics"] = [{"name": "dice", "parms": {}}]
+    with pytest.raises(ConfigError):
+        load_experiment_dict(raw)
