@@ -23,13 +23,13 @@ from __future__ import annotations
 
 import os
 import random
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
 import torch
 from torch import Tensor, nn
-from torch.utils.data import DataLoader, DistributedSampler
+from torch.utils.data import DataLoader, DistributedSampler, Sampler
 
 from mlops.application.bundle import (
     MANIFEST,
@@ -153,12 +153,34 @@ def build_optimizer(training: Training, params: Iterable[Tensor]) -> torch.optim
     return cls(params, lr=training.learning_rate)
 
 
+class ShardSampler(Sampler[int]):
+    """Rank ``r`` of ``world_size`` takes indices ``r, r + world_size, ...``, in order.
+
+    For validation: unlike ``DistributedSampler`` it never pads, so every case counts exactly
+    once in the all-reduced (sum, count) metrics and a 2-rank val score equals a 1-process one.
+    Ranks may get different numbers of batches, so evaluation must not run collectives per
+    batch (``train_worker`` evaluates the unwrapped model, never the DDP wrapper).
+    """
+
+    def __init__(self, n: int, *, rank: int, world_size: int) -> None:
+        self.n, self.rank, self.world_size = n, rank, world_size
+
+    def __iter__(self) -> Iterator[int]:
+        return iter(range(self.rank, self.n, self.world_size))
+
+    def __len__(self) -> int:
+        return len(range(self.rank, self.n, self.world_size))
+
+
 def _loader(
     dataset, *, batch_size: int, shuffle: bool, seed: int, worker: Worker
 ) -> DataLoader[Sample]:
     if worker.world_size == 1:
         g = torch.Generator().manual_seed(seed)
         return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, generator=g, drop_last=False)
+    if not shuffle:  # validation: shard without padding
+        shard = ShardSampler(len(dataset), rank=worker.rank, world_size=worker.world_size)
+        return DataLoader(dataset, batch_size=batch_size, sampler=shard, drop_last=False)
     # DistributedSampler is a pure function of (seed, epoch): nothing to checkpoint.
     sampler = DistributedSampler(
         dataset, num_replicas=worker.world_size, rank=worker.rank, shuffle=shuffle, seed=seed
@@ -374,7 +396,9 @@ def train_worker(
         _set_epoch(train_loader, epoch)
         row = {"train/loss": _train_epoch(trained, loss_fn, optimizer, train_loader, augments, device)}
         if val_loader is not None:
-            row.update(_eval_epoch(trained, loss_fn, val_loader, device, metrics, infer))
+            # The unwrapped model: same weights, but no DDP collectives, which would deadlock
+            # when ranks hold different numbers of val batches (ShardSampler).
+            row.update(_eval_epoch(model, loss_fn, val_loader, device, metrics, infer))
         history.append(row)
         if on_epoch is not None:
             on_epoch(epoch, row)

@@ -50,7 +50,7 @@ def _spec(workers: int, **overrides):
 
 
 def _data(**kw) -> SyntheticBlobs:
-    return SyntheticBlobs(n_train=4, n_val=2, shape=(8, 8, 8), in_channels=1, num_classes=2, **kw)
+    return SyntheticBlobs(**{"n_train": 4, "n_val": 2, "shape": (8, 8, 8), "in_channels": 1, "num_classes": 2, **kw})
 
 
 def test_one_ray_worker_reproduces_the_local_run(launcher):
@@ -141,23 +141,29 @@ def test_wrong_data_never_starts_a_ray_run(launcher):
     assert tracker.runs == []
 
 
-def test_metrics_are_aggregated_over_every_rank(launcher):
-    from mlops.registry import METRICS, MODELS
+@pytest.mark.parametrize("n_val", [2, 3])
+def test_metrics_are_aggregated_over_every_rank(launcher, n_val):
+    # n_val=3 on 2 ranks: DistributedSampler would pad by repeating a case, counting it twice.
+    # Every val case must count exactly once, as in a single-process run.
+    from mlops.registry import LOSSES, METRICS, MODELS
 
     spec = load_experiment_dict(
         {**_spec(workers=2).model_dump(), "metrics": [{"name": "dice", "params": {}}]}
     )
     store = InMemoryArtifactStore()
-    result = launcher.launch(spec, data=_data(), tracker=InMemoryTracker(), artifacts=store)
+    result = launcher.launch(spec, data=_data(n_val=n_val), tracker=InMemoryTracker(), artifacts=store)
 
     # Recompute on the driver over the whole val split with the final weights: each rank only
     # saw half of it, so this matches only if the per-rank sums were all-reduced.
     model = MODELS.build(spec.model.name, spec.model.params)
     model.load_state_dict(load_bundle(store, result.run_id).model_state)
     model.eval()
-    x, y = _data().load(spec.dataset, spec.preprocessing).val.tensors
+    x, y = _data(n_val=n_val).load(spec.dataset, spec.preprocessing).val.tensors
     with torch.no_grad():
-        per_sample = METRICS.build("dice", {})(model(x), y)
+        logits = model(x)
+        per_sample = METRICS.build("dice", {})(logits, y)
+        loss = LOSSES.build(spec.loss.name, spec.loss.params)(logits, y).item()
+    assert result.final_metrics["val/loss"] == pytest.approx(loss, abs=1e-6)
     for key, values in per_sample.items():
         expected = values[~values.isnan()].double().mean().item()
         assert result.final_metrics[f"val/{key}"] == pytest.approx(expected, abs=1e-6), key

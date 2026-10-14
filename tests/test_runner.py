@@ -520,3 +520,15 @@ def test_sliding_window_validation_end_to_end(spec):
     b = run_experiment(spec, data=_data(), tracker=InMemoryTracker())
     assert a.history == b.history
     assert {"val/loss", "val/dice/1"} <= set(a.final_metrics)
+
+
+# --- validation sharding: every val case exactly once across ranks (no padding) ---
+
+
+@pytest.mark.parametrize("n,world_size", [(5, 2), (2, 2), (1, 3), (9, 4), (0, 2)])
+def test_val_shards_cover_every_case_exactly_once(n, world_size):
+    from mlops.application.runner import ShardSampler
+
+    shards = [list(ShardSampler(n, rank=r, world_size=world_size)) for r in range(world_size)]
+    assert sorted(i for s in shards for i in s) == list(range(n))
+    assert [len(ShardSampler(n, rank=r, world_size=world_size)) for r in range(world_size)] == [len(s) for s in shards]
