@@ -112,11 +112,11 @@ def test_run_mlflow_without_uri_is_a_clean_error(capsys):
 
 
 def test_run_unknown_dataset_is_a_clean_error(tmp_path, capsys):
-    path = _write_yaml(tmp_path / "e.yaml", **{"dataset.name": "msd-task09-spleen"})
+    path = _write_yaml(tmp_path / "e.yaml", **{"dataset.name": "msd-task03-liver"})
     rc = main(["run", str(path), "--tracker", "inmemory"])
     assert rc == 2
     err = capsys.readouterr().err
-    assert "msd-task09-spleen" in err and "DataProvider" in err
+    assert "msd-task03-liver" in err and "DataProvider" in err
 
 
 def test_run_attempt_and_device_are_forwarded(tmp_path, capsys):

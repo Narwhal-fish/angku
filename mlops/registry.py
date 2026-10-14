@@ -1,4 +1,4 @@
-"""Registries for researcher-defined components (models, losses, augmentations).
+"""Registries for researcher-defined components (models, losses, augmentations, datasets).
 
 The platform never imports a concrete model. Researchers register factories
 under a name; ``experiment.yaml`` refers to that name and supplies ``params``.
@@ -108,6 +108,10 @@ class Registry(Generic[T]):
 MODELS: Registry[Any] = Registry("model")
 LOSSES: Registry[Any] = Registry("loss")
 AUGMENTATIONS: Registry[Any] = Registry("augmentation")
+# Data providers, keyed by ``dataset.name``. Unlike the other kinds, ``params`` here is the
+# provider's *operational* config (e.g. ``root``: where the files live on this machine), which
+# never enters any id; the yaml's ``preprocessing`` section goes to ``DataProvider.load``.
+DATASETS: Registry[Any] = Registry("dataset")
 
 
 def discover(package: str) -> list[str]:

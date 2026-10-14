@@ -20,10 +20,15 @@ dataset:
   version: v1
   snapshot: dvc:8d1f2c3a4b5e6f7081920a1b2c3d4e5f
 
+# Validated by experiments/datasets/msd_spleen.py (SpleenPreprocessing). Every field is
+# spelled out: defaults are not in the fingerprint, explicit values are.
 preprocessing:
   spacing: [1.5, 1.5, 2.0]
   intensity_range: [-57, 164]
   roi_size: [96, 96, 96]
+  num_val: 9             # last 9 cases by file name are validation
+  pos: 1                 # train crops: pos:neg odds of centring on a spleen voxel
+  neg: 1
 
 model:
   name: swinunetr

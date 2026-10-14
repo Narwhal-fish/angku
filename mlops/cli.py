@@ -3,16 +3,19 @@ concrete adapters (tracker, data provider, artifact store) and hands them to
 ``run_experiment``. Nothing under ``mlops/application`` knows this exists.
 
     mlops id     experiment.yaml
-    mlops run    experiment.yaml [--artifacts DIR] [--tracker mlflow|inmemory]
+    mlops run    experiment.yaml [--artifacts DIR] [--data-root DIR] [--tracker mlflow|inmemory]
                                  [--mlflow-uri URI] [--launcher local|ray] [--ray-address ADDR]
                                  [--device cpu] [--attempt N] [--json]
     mlops rayjob experiment.yaml [--namespace NS] [--artifacts-pvc PVC] [--attempt N]
                                  [--submit [--kubectl "kubectl --context X"]]
-    mlops reproduce RUN_ID --artifacts DIR [--tracker mlflow|inmemory] [--mlflow-uri URI]
+    mlops reproduce RUN_ID --artifacts DIR [--data-root DIR] [--tracker mlflow|inmemory] [--mlflow-uri URI]
                                  [--device cpu] [--atol X] [--json]
     mlops report RUN_ID --artifacts DIR [--out FILE]
 
 Exit codes: 0 ok, 1 training failed / bundle not reproduced, 2 bad input (yaml, pins, wiring).
+
+Datasets: built-in ``synthetic-blobs``, plus whatever ``experiments/`` registers in
+``mlops.registry.DATASETS``; those read files under ``--data-root`` (default: $MLOPS_DATA_ROOT).
 """
 
 from __future__ import annotations
@@ -42,9 +45,9 @@ from mlops.domain import ExperimentSpec, UnpinnedInputError, compute_experiment_
 from mlops.ports.artifacts import ArtifactError
 from mlops.ports.data import DataError, DataProvider
 from mlops.ports.tracking import Tracker, TrackerError
-from mlops.registry import RegistryError, discover
+from mlops.registry import DATASETS, RegistryError, discover
 
-# Dataset name -> provider factory. A real provider (e.g. msd-task09-spleen) is added here.
+# Built-in dataset name -> provider factory. Real datasets are plugins registered in DATASETS.
 _DATA_PROVIDERS: dict[str, Callable[[], DataProvider]] = {
     "synthetic-blobs": SyntheticBlobs,
 }
@@ -74,14 +77,19 @@ def _discover(package: str) -> None:
         raise CliError(f"cannot import experiments package {package!r}: {e}") from e
 
 
-def _data_provider(spec: ExperimentSpec) -> DataProvider:
+def _data_provider(spec: ExperimentSpec, data_root: str | None) -> DataProvider:
+    name = spec.dataset.name
+    if name in _DATA_PROVIDERS:
+        return _DATA_PROVIDERS[name]()
+    if name not in DATASETS:
+        known = ", ".join(sorted({*_DATA_PROVIDERS, *DATASETS.names()}))
+        raise CliError(f"no DataProvider for dataset {name!r}; known: {known}")
+    if not data_root:
+        raise CliError(f"dataset {name!r} reads files: pass --data-root DIR or set MLOPS_DATA_ROOT")
     try:
-        return _DATA_PROVIDERS[spec.dataset.name]()
-    except KeyError:
-        known = ", ".join(sorted(_DATA_PROVIDERS))
-        raise CliError(
-            f"no DataProvider for dataset {spec.dataset.name!r}; known: {known}"
-        ) from None
+        return DATASETS.build(name, {"root": data_root})
+    except RegistryError as e:
+        raise CliError(str(e)) from e
 
 
 def _tracker(spec: ExperimentSpec, choice: str | None, mlflow_uri: str | None) -> Tracker:
@@ -130,7 +138,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     if spec.unpinned_inputs():
         raise CliError("cannot run: unpinned inputs: " + ", ".join(spec.unpinned_inputs()))
     _discover(args.experiments)
-    data = _data_provider(spec)
+    data = _data_provider(spec, args.data_root)
     tracker = _tracker(spec, args.tracker, args.mlflow_uri)
     launcher = _launcher(spec, args)
     store = LocalArtifactStore(args.artifacts) if args.artifacts else None
@@ -212,7 +220,7 @@ def cmd_reproduce(args: argparse.Namespace) -> int:
     except ArtifactError as e:
         raise CliError(str(e)) from e
     _discover(args.experiments)
-    data = _data_provider(spec)
+    data = _data_provider(spec, args.data_root)
     tracker = _tracker(spec, args.tracker, args.mlflow_uri)
 
     try:
@@ -258,6 +266,11 @@ def cmd_report(args: argparse.Namespace) -> int:
 # -- entry point ---------------------------------------------------------------
 
 
+def _add_data_root(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--data-root", metavar="DIR", default=os.environ.get("MLOPS_DATA_ROOT"),
+                   help="where dataset files live on this machine, e.g. DIR/Task09_Spleen (default: $MLOPS_DATA_ROOT)")
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="mlops", description=__doc__.split("\n\n")[0])
     sub = p.add_subparsers(dest="command", required=True)
@@ -269,6 +282,7 @@ def build_parser() -> argparse.ArgumentParser:
     run = sub.add_parser("run", help="train one run of a spec")
     run.add_argument("experiment", help="path to experiment.yaml")
     run.add_argument("--artifacts", metavar="DIR", help="write the run bundle under DIR/<run_id>/")
+    _add_data_root(run)
     run.add_argument("--tracker", choices=["mlflow", "inmemory"], help="override tracking.backend")
     run.add_argument("--mlflow-uri", metavar="URI", help="override tracking.uri (e.g. sqlite:///mlflow.db)")
     run.add_argument("--launcher", choices=["local", "ray"], default="local",
@@ -295,6 +309,7 @@ def build_parser() -> argparse.ArgumentParser:
     rp = sub.add_parser("reproduce", help="re-run a bundle and check run_id, history and weights match")
     rp.add_argument("run_id", help="run to verify; its bundle must be under --artifacts")
     rp.add_argument("--artifacts", metavar="DIR", required=True, help="artifact root holding DIR/<run_id>/")
+    _add_data_root(rp)
     rp.add_argument("--tracker", choices=["mlflow", "inmemory"], help="where the replay is recorded")
     rp.add_argument("--mlflow-uri", metavar="URI", help="override tracking.uri")
     rp.add_argument("--device", help="torch device override, e.g. cpu")

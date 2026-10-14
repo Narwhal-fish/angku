@@ -30,6 +30,7 @@ distributed = [
 medical = [
     "monai>=1.6",
     "einops>=0.8",  # MONAI optional dep, required by SwinUNETR.forward
+    "nibabel>=5.3",  # MONAI LoadImage reader for NIfTI (msd-task09-spleen)
 ]
 
 [project.scripts]
