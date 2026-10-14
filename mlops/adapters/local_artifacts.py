@@ -38,6 +38,11 @@ class LocalArtifactStore:
             raise ArtifactError(f"unknown run {run_id}")
         return sorted(p.relative_to(run_dir).as_posix() for p in run_dir.rglob("*") if p.is_file())
 
+    def runs(self) -> list[str]:
+        if not self.root.is_dir():
+            return []
+        return sorted(p.name for p in self.root.iterdir() if p.is_dir() and any(p.iterdir()))
+
     def _path(self, run_id: str, name: str) -> Path:
         if not run_id or "/" in run_id or run_id in (".", ".."):
             raise ArtifactError(f"unsafe run id {run_id!r}")

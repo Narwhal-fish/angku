@@ -37,3 +37,7 @@ class ArtifactStore(Protocol):
     def list(self, run_id: str) -> list[str]:
         """Sorted artifact names for ``run_id``. Raise ``ArtifactError`` for an unknown run."""
         ...
+
+    def runs(self) -> list[str]:
+        """Sorted ids of every run holding at least one artifact (empty store -> [])."""
+        ...

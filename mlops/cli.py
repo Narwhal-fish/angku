@@ -14,6 +14,7 @@ concrete adapters (tracker, data provider, artifact store) and hands them to
                                  [--device cpu] [--atol X] [--json]
     mlops report RUN_ID --artifacts DIR [--out FILE]
     mlops diff   RUN_A RUN_B --artifacts DIR [--artifacts-b DIR] [--json]
+    mlops list   --artifacts DIR [--experiment ID_PREFIX] [--json]
     mlops snapshot experiment.yaml [--data-root DIR]
 
 Exit codes: 0 ok, 1 training failed / bundle not reproduced / diff: different experiments,
@@ -52,6 +53,7 @@ from mlops.application.bundle import SPEC, load_bundle, load_checkpoint
 from mlops.application.launch import Launcher, LocalLauncher
 from mlops.application.runner import verify_data
 from mlops.application.diff import ABSENT, Change, RunDiff, diff_runs
+from mlops.application.listing import ExperimentGroup, group_by_experiment, list_runs
 from mlops.application.report import render_report, write_report
 from mlops.application.reproduce import ReproduceError, ReproduceReport, reproduce_run
 from mlops.config import ConfigError, load_experiment_yaml
@@ -398,6 +400,46 @@ def _print_diff(d: RunDiff) -> None:
             print(f"  {m.name:<{width}}  {_fmt(m.a)} -> {_fmt(m.b)}{delta}")
 
 
+def cmd_list(args: argparse.Namespace) -> int:
+    if not Path(args.artifacts).is_dir():
+        raise CliError(f"no such directory: {args.artifacts}")
+    groups = group_by_experiment(list_runs(LocalArtifactStore(args.artifacts), experiment=args.experiment))
+    if args.json:
+        print(json.dumps([g.to_dict() for g in groups], indent=2))
+    elif not groups:
+        print("no runs" + (f" for experiment {args.experiment}" if args.experiment else ""))
+    else:
+        for i, g in enumerate(groups):
+            if i:
+                print()
+            _print_group(g)
+    return 0
+
+
+def _print_group(g: ExperimentGroup) -> None:
+    if g.metrics_agree is None:
+        verdict = f"{g.finished} finished"
+    elif g.metrics_agree:
+        verdict = f"{g.finished} finished, final metrics identical"
+    else:
+        ranges = ", ".join(f"{k} {_fmt(lo)}..{_fmt(hi)}" for k, (lo, hi) in g.spread.items())
+        verdict = f"{g.finished} finished, final metrics DIFFER: {ranges}"
+    print(f"{g.name}  {g.experiment_id[:12]}  ({len(g.runs)} run(s); {verdict})")
+    for r in g.runs:
+        attempt = f"a{r.attempt}" if r.attempt is not None else "a?"
+        epochs = f"{r.epochs_done if r.epochs_done is not None else '?'}/{r.epochs_total or '?'} ep"
+        notes = []
+        if r.resumes:
+            notes.append(f"resumed x{r.resumes}")
+        if r.resumable:
+            notes.append(f"resumable: mlops resume {r.run_id[:12]}...")
+        if r.error:
+            notes.append(r.error)
+        metrics = "  ".join(f"{k}={_fmt(v)}" for k, v in r.final_metrics.items())
+        tail = "  ".join(x for x in (metrics, "; ".join(notes)) if x)
+        print(f"  {r.run_id[:12]}  {attempt:<3}  {r.status:<11}  {epochs:<8}  {tail}".rstrip())
+
+
 def cmd_snapshot(args: argparse.Namespace) -> int:
     spec = _load(args.experiment)
     _discover(args.experiments)
@@ -500,6 +542,13 @@ def build_parser() -> argparse.ArgumentParser:
     df.add_argument("--artifacts-b", metavar="DIR", help="artifact root holding run_b, if it is elsewhere")
     df.add_argument("--json", action="store_true", help="machine-readable diff on stdout")
     df.set_defaults(func=cmd_diff)
+
+    ls = sub.add_parser("list", help="runs under an artifact root, grouped by experiment, and whether "
+                                     "each experiment's finished attempts agree")
+    ls.add_argument("--artifacts", metavar="DIR", required=True, help="artifact root to scan")
+    ls.add_argument("--experiment", metavar="ID", help="only this ExperimentID (a prefix is enough)")
+    ls.add_argument("--json", action="store_true", help="machine-readable listing on stdout")
+    ls.set_defaults(func=cmd_list)
 
     sn = sub.add_parser("snapshot", help="print the content hash of the data a spec would load, to pin as dataset.snapshot")
     sn.add_argument("experiment", help="path to experiment.yaml")

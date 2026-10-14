@@ -210,3 +210,18 @@ def test_manifest_without_resumes_still_loads():
         '{"experiment_id": "e", "run_id": "r", "attempt": 1, "status": "FINISHED", "device": "cpu"}'
     )
     assert m.resumes == []
+
+
+def test_runs_lists_every_run_sorted(store):
+    assert store.runs() == []
+    store.put("r2", "a.txt", b"x")
+    store.put("r1", "sub/b.txt", b"y")
+    assert store.runs() == ["r1", "r2"]
+
+
+def test_local_runs_ignores_stray_files_and_missing_root(tmp_path):
+    assert LocalArtifactStore(tmp_path / "nope").runs() == []
+    store = LocalArtifactStore(tmp_path)
+    store.put("r1", "a.txt", b"x")
+    (tmp_path / "notes.txt").write_text("not a run")
+    assert store.runs() == ["r1"]

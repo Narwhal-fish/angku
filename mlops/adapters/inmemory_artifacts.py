@@ -22,6 +22,9 @@ class InMemoryArtifactStore:
     def list(self, run_id: str) -> list[str]:
         return sorted(self._run(run_id))
 
+    def runs(self) -> list[str]:
+        return sorted(r for r, files in self._runs.items() if files)
+
     def _run(self, run_id: str) -> dict[str, bytes]:
         try:
             return self._runs[run_id]

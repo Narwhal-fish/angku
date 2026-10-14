@@ -1,0 +1,137 @@
+"""Use case: what is under an artifact root, run by run and experiment by experiment.
+
+Reads ``spec.json`` + ``manifest.json`` only (never weights), so scanning hundreds of
+SwinUNETR bundles is cheap. ``group_by_experiment`` answers the question content-addressed
+ids exist for: did every FINISHED attempt of this ExperimentID end with the same final
+metrics?
+
+Statuses: FINISHED / FAILED (from the manifest), INTERRUPTED (no manifest but a
+checkpoint: killed, resumable), INCOMPLETE (no manifest, no checkpoint), UNREADABLE
+(spec or manifest does not parse; ``error`` says why). Directories without ``spec.json``
+are not runs and are skipped.
+"""
+
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass, field
+from typing import Any
+
+from pydantic import ValidationError
+
+from mlops.application.bundle import CHECKPOINT, MANIFEST, SPEC
+from mlops.domain.experiment import ExperimentSpec
+from mlops.domain.identity import compute_experiment_id
+from mlops.domain.manifest import RunManifest
+from mlops.ports.artifacts import ArtifactStore
+
+
+@dataclass(frozen=True)
+class RunSummary:
+    run_id: str
+    experiment_id: str
+    name: str
+    status: str
+    attempt: int | None = None
+    epochs_done: int | None = None
+    epochs_total: int | None = None
+    final_metrics: dict[str, float] = field(default_factory=dict)
+    workers: int | None = None
+    resumes: int = 0
+    # A checkpoint exists and the run did not finish: `mlops resume` can continue it.
+    resumable: bool = False
+    error: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "run_id": self.run_id, "experiment_id": self.experiment_id, "name": self.name,
+            "status": self.status, "attempt": self.attempt, "epochs_done": self.epochs_done,
+            "epochs_total": self.epochs_total,
+            "final_metrics": {k: None if math.isnan(v) else v for k, v in self.final_metrics.items()},
+            "workers": self.workers, "resumes": self.resumes, "resumable": self.resumable, "error": self.error,
+        }
+
+
+@dataclass(frozen=True)
+class ExperimentGroup:
+    experiment_id: str
+    name: str
+    runs: list[RunSummary]
+
+    @property
+    def finished(self) -> int:
+        return sum(r.status == "FINISHED" for r in self.runs)
+
+    @property
+    def spread(self) -> dict[str, tuple[float, float]]:
+        """(min, max) of every final metric that differs between the FINISHED runs."""
+        done = [r.final_metrics for r in self.runs if r.status == "FINISHED"]
+        out: dict[str, tuple[float, float]] = {}
+        for k in sorted({k for m in done for k in m}):
+            values = [m.get(k, math.nan) for m in done]
+            if len({_key(v) for v in values}) > 1:
+                defined = [v for v in values if not math.isnan(v)] or [math.nan]
+                out[k] = (min(defined), max(defined))
+        return out
+
+    @property
+    def metrics_agree(self) -> bool | None:
+        """True / False across >= 2 FINISHED runs; None when there is nothing to compare."""
+        return None if self.finished < 2 else not self.spread
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "experiment_id": self.experiment_id, "name": self.name, "finished": self.finished,
+            "metrics_agree": self.metrics_agree,
+            "spread": {k: list(v) for k, v in self.spread.items()},
+            "runs": [r.to_dict() for r in self.runs],
+        }
+
+
+def list_runs(store: ArtifactStore, *, experiment: str | None = None) -> list[RunSummary]:
+    """Every run in ``store``; ``experiment`` keeps those whose ExperimentID starts with it."""
+    out = []
+    for run_id in store.runs():
+        files = store.list(run_id)
+        if SPEC not in files:
+            continue
+        s = _summarise(store, run_id, files)
+        if experiment is None or s.experiment_id.startswith(experiment):
+            out.append(s)
+    return sorted(out, key=lambda r: (r.name, r.experiment_id, r.attempt or 0, r.run_id))
+
+
+def group_by_experiment(runs: list[RunSummary]) -> list[ExperimentGroup]:
+    groups: dict[str, list[RunSummary]] = {}
+    for r in runs:
+        groups.setdefault(r.experiment_id, []).append(r)
+    return [ExperimentGroup(exp, rs[0].name, rs) for exp, rs in groups.items()]
+
+
+def _summarise(store: ArtifactStore, run_id: str, files: list[str]) -> RunSummary:
+    try:
+        spec = ExperimentSpec.model_validate_json(store.get(run_id, SPEC))
+        manifest = RunManifest.model_validate_json(store.get(run_id, MANIFEST)) if MANIFEST in files else None
+    except (ValidationError, ValueError) as e:
+        return RunSummary(run_id=run_id, experiment_id="?", name="?", status="UNREADABLE",
+                          error=str(e).splitlines()[0])
+    has_ckpt = CHECKPOINT in files
+    base = dict(
+        run_id=run_id, experiment_id=compute_experiment_id(spec), name=spec.meta.name,
+        epochs_total=spec.training.epochs, workers=spec.resources.workers,
+    )
+    if manifest is None:
+        return RunSummary(**base, status="INTERRUPTED" if has_ckpt else "INCOMPLETE", resumable=has_ckpt)
+    return RunSummary(
+        **base,
+        status=manifest.status,
+        attempt=manifest.attempt,
+        epochs_done=len(manifest.history),
+        final_metrics=dict(manifest.history[-1]) if manifest.history else {},
+        resumes=len(manifest.resumes),
+        resumable=has_ckpt and manifest.status != "FINISHED",
+    )
+
+
+def _key(v: float) -> Any:
+    return "nan" if math.isnan(v) else v

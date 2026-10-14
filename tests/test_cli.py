@@ -517,3 +517,40 @@ def test_diff_across_two_artifact_roots(tmp_path, capsys):
 def test_diff_unknown_run_exits_2(tmp_path, capsys):
     assert main(["diff", "a" * 64, "b" * 64, "--artifacts", str(tmp_path)]) == 2
     assert "Traceback" not in capsys.readouterr().err
+
+
+# --- list ---
+
+
+def test_list_groups_attempts_and_says_they_agree(tmp_path, capsys):
+    art = tmp_path / "artifacts"
+    a = _run_json(capsys, str(SMOKE), "--artifacts", str(art))
+    _run_json(capsys, str(SMOKE), "--artifacts", str(art), "--attempt", "2")
+    _run_json(capsys, str(_write_yaml(tmp_path / "s.yaml", **{"training.seed": 7})), "--artifacts", str(art))
+    assert main(["list", "--artifacts", str(art)]) == 0
+    out = capsys.readouterr().out
+    assert out.count("tiny-cnn-smoke") == 2  # one header per experiment
+    assert "2 finished, final metrics identical" in out
+    assert a[:12] in out and "FINISHED" in out
+
+
+def test_list_filters_by_experiment(tmp_path, capsys):
+    art = tmp_path / "artifacts"
+    _run_json(capsys, str(SMOKE), "--artifacts", str(art))
+    _run_json(capsys, str(_write_yaml(tmp_path / "s.yaml", **{"training.seed": 7})), "--artifacts", str(art))
+    exp = compute_experiment_id(load_experiment_yaml(SMOKE))
+    assert main(["list", "--artifacts", str(art), "--experiment", exp[:12], "--json"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert [g["experiment_id"] for g in out] == [exp]
+    assert out[0]["runs"][0]["status"] == "FINISHED"
+
+
+def test_list_missing_root_exits_2(tmp_path, capsys):
+    assert main(["list", "--artifacts", str(tmp_path / "nope")]) == 2
+    assert "no such directory" in capsys.readouterr().err
+
+
+def test_list_no_match_says_so(tmp_path, capsys):
+    tmp_path.joinpath("artifacts").mkdir()
+    assert main(["list", "--artifacts", str(tmp_path / "artifacts")]) == 0
+    assert "no runs" in capsys.readouterr().out
