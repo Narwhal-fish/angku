@@ -259,3 +259,41 @@ def test_undefined_metric_on_both_sides_is_not_a_mismatch(spec, store):
     run_id = run_experiment(spec, data=_data(), tracker=InMemoryTracker(), artifacts=store).run_id
     report = _reproduce(store, run_id)
     assert report.ok, report.mismatches
+
+
+# --- environment diff: explains a NOT REPRODUCED (and is shown even when it reproduces) ---
+
+
+def test_replay_records_its_environment_and_diffs_it_against_the_original(spec, store):
+    from tests.test_environment import FixedProbe
+
+    run_id = run_experiment(spec, data=_data(), tracker=InMemoryTracker(), artifacts=store,
+                            probe=FixedProbe(commit_ok=True)).run_id
+    report = _reproduce(store, run_id, probe=FixedProbe(commit_ok=False))
+    assert report.ok  # same weights: the env difference did not matter this time
+    changes = {c.path: c for c in report.environment}
+    assert changes["code.changed"].a == [] and changes["code.changed"].b == ["mlops/x.py"]
+
+
+def test_same_environment_gives_no_environment_changes(spec, store):
+    from tests.test_environment import FixedProbe
+
+    run_id = run_experiment(spec, data=_data(), tracker=InMemoryTracker(), artifacts=store,
+                            probe=FixedProbe()).run_id
+    assert _reproduce(store, run_id, probe=FixedProbe()).environment == []
+
+
+def test_environment_not_recorded_on_either_side_is_said_once(spec, store, run_id):
+    from tests.test_environment import FixedProbe
+
+    report = _reproduce(store, run_id, probe=FixedProbe())
+    assert [(c.path, c.a, c.b) for c in report.environment] == [("environment", "not recorded", "recorded")]
+
+
+def test_environment_changes_are_in_the_json(spec, store):
+    from tests.test_environment import FixedProbe
+
+    run_id = run_experiment(spec, data=_data(), tracker=InMemoryTracker(), artifacts=store,
+                            probe=FixedProbe(commit_ok=True)).run_id
+    out = json.loads(json.dumps(_reproduce(store, run_id, probe=FixedProbe(commit_ok=False)).to_dict()))
+    assert {"path": "code.changed", "a": [], "b": ["mlops/x.py"]} in out["environment"]

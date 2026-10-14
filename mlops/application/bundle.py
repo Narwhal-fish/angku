@@ -3,8 +3,10 @@
     spec.json       the full ExperimentSpec (meta and tracking included, so it can be re-run as-is)
     manifest.json   RunManifest: ids, attempt, status, per-epoch history
     model.pt        final model ``state_dict`` (absent when the run FAILED)
-    checkpoint.pt   latest mid-run training state, only with ``checkpoint_every``: what
-                    ``resume`` continues from. Not evidence; a replay never reads it.
+    checkpoint.pt   latest mid-run training state, only with ``checkpoint_every`` on the local
+                    launcher: what ``resume`` continues from. Not evidence; a replay never reads it.
+    launch.json     how a checkpointing Ray run was launched (attempt, Ray storage path): the
+                    checkpoints themselves live in Ray's storage, this says where to resume from.
 
 JSON rather than YAML on purpose: ``mlops.config`` is the only YAML-aware
 layer, and a bundle must be readable without it.
@@ -13,7 +15,8 @@ layer, and a bundle must be readable without it.
 from __future__ import annotations
 
 import io
-from dataclasses import dataclass, field
+import json
+from dataclasses import asdict, dataclass, field
 from collections.abc import Mapping
 from typing import Any
 
@@ -28,6 +31,7 @@ SPEC = "spec.json"
 MANIFEST = "manifest.json"
 MODEL = "model.pt"
 CHECKPOINT = "checkpoint.pt"
+LAUNCH = "launch.json"
 _CHECKPOINT_FORMAT = 1
 
 
@@ -145,3 +149,23 @@ def load_checkpoint(store: ArtifactStore, run_id: str) -> Checkpoint:
         environment=EnvironmentRecord.model_validate_json(p["environment"]) if p["environment"] else None,
         resumes=[ResumePoint.model_validate_json(r) for r in p["resumes"]],
     )
+
+
+# -- launch record (Ray runs keep their checkpoints in Ray's storage) ---------------------------
+
+
+@dataclass(frozen=True)
+class LaunchRecord:
+    launcher: str
+    attempt: int
+    checkpoint_every: int
+    storage_path: str | None = None
+
+
+def save_launch(store: ArtifactStore, run_id: str, launch: LaunchRecord) -> None:
+    store.put(run_id, LAUNCH, json.dumps(asdict(launch), indent=2).encode())
+
+
+def load_launch(store: ArtifactStore, run_id: str) -> LaunchRecord:
+    """Raise ``ArtifactError`` when the run has no launch record."""
+    return LaunchRecord(**json.loads(store.get(run_id, LAUNCH)))

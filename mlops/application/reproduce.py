@@ -7,6 +7,10 @@ never written to: the replay lands in a ``scratch`` store supplied by the caller
 
 Only FINISHED bundles can be verified (a FAILED one has no weights). A replay
 that itself blows up propagates as-is: a broken environment is not a mismatch.
+
+With a ``probe`` the replay records its environment too, and ``environment`` lists what
+differs from the original's (library versions, GPU, threads, code state): not a check,
+the likely explanation when weights or history do not match.
 """
 
 from __future__ import annotations
@@ -18,9 +22,11 @@ from typing import Any
 import torch
 
 from mlops.application.bundle import Bundle, load_bundle
+from mlops.application.diff import Change, diff_environments
 from mlops.application.runner import run_experiment
 from mlops.ports.artifacts import ArtifactStore
 from mlops.ports.data import DataProvider
+from mlops.ports.environment import EnvironmentProbe
 from mlops.ports.tracking import Tracker
 
 CHECKS = ("run_id", "history", "weights")
@@ -43,6 +49,8 @@ class ReproduceReport:
     replay_run_id: str  # what re-running the bundle actually computed
     checks: dict[str, bool]
     mismatches: list[Mismatch] = field(default_factory=list)
+    # Original vs replay environment (informational; empty = nothing differs or nothing recorded).
+    environment: list[Change] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -56,6 +64,7 @@ class ReproduceReport:
             "replay_run_id": self.replay_run_id,
             "checks": dict(self.checks),
             "mismatches": [{"check": m.check, "detail": m.detail} for m in self.mismatches],
+            "environment": [c.to_dict() for c in self.environment],
         }
 
 
@@ -68,6 +77,7 @@ def reproduce_run(
     scratch: ArtifactStore,
     device: str | None = None,
     atol: float = 0.0,
+    probe: EnvironmentProbe | None = None,
 ) -> ReproduceReport:
     """Re-run the bundle at ``run_id`` into ``scratch`` and compare.
 
@@ -88,6 +98,7 @@ def reproduce_run(
         artifacts=scratch,
         attempt=original.manifest.attempt,
         device=device,
+        probe=probe,
     )
     replay = load_bundle(scratch, result.run_id)
 
@@ -102,6 +113,7 @@ def reproduce_run(
         replay_run_id=result.run_id,
         checks={c: c not in failed for c in CHECKS},
         mismatches=mismatches,
+        environment=diff_environments(original.manifest, replay.manifest) if probe is not None else [],
     )
 
 

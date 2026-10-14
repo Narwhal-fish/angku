@@ -9,6 +9,14 @@ epochs 1-6, in MLflow and in its FAILED manifest). Rank 0 returns its history an
 ships the final ``state_dict`` back as a Ray checkpoint; the driver writes the
 bundle. Per-epoch ``ray.train.report`` is still called for Ray's own dashboard.
 
+Checkpoint + resume use Ray Train's own checkpoints: every ``checkpoint_every`` epochs each
+rank reports a directory with its RNG state (rank 0 adds weights, optimizer, history), which
+Ray merges and persists under ``storage_path/<run name>``. ``resume=True`` launches the same
+run name on the same storage; Ray hands each rank the latest checkpoint via
+``get_checkpoint()`` and the run continues bit-exactly. ``launch.json`` in the artifact store
+records the storage path so ``mlops resume`` can find it. On KubeRay that storage must be
+shared by all pods (a PVC or object storage).
+
 On Kubernetes the same class runs inside a KubeRay ``RayJob`` whose entrypoint
 is ``mlops run --launcher ray``; see ``mlops.adapters.kuberay``.
 
@@ -33,19 +41,30 @@ from ray.train import Checkpoint, RunConfig, ScalingConfig
 from ray.train.torch import TorchTrainer
 from ray.util.queue import Queue
 
-from mlops.application.bundle import save_bundle
+from mlops.application.bundle import (
+    MANIFEST,
+    LaunchRecord,
+    TrainState,
+    load_launch,
+    save_bundle,
+    save_launch,
+    save_spec,
+)
 from mlops.application.runner import RunnerError, RunResult, Worker, train_worker, verify_data
 from mlops.domain.environment import EnvCheck, EnvironmentRecord, record_environment
 from mlops.domain.experiment import ExperimentSpec
 from mlops.domain.identity import compute_experiment_id, compute_run_id
-from mlops.domain.manifest import RunManifest
-from mlops.ports.artifacts import ArtifactStore
+from mlops.domain.manifest import ResumePoint, RunManifest
+from mlops.ports.artifacts import ArtifactError, ArtifactStore
 from mlops.ports.data import DataProvider
 from mlops.ports.environment import EnvironmentProbe
 from mlops.ports.tracking import RunStatus, Tracker
 from mlops.registry import discover
 
-_STATE_FILE = "model.pt"
+_STATE_FILE = "model.pt"  # final weights, rank 0
+# Mid-run checkpoints (checkpoint_every): Ray merges every rank's files into one directory.
+_TRAIN_STATE = "state.pt"  # rank 0: weights, optimizer, history, environment, resume points
+_RNG_FILE = "rng-{rank}.pt"  # every rank: its own RNG states (ranks draw different augmentations)
 
 
 def _train_loop(config: dict[str, Any]) -> dict[str, Any] | None:
@@ -59,16 +78,43 @@ def _train_loop(config: dict[str, Any]) -> dict[str, Any] | None:
     ctx = ray.train.get_context()
     worker = Worker(rank=ctx.get_world_rank(), world_size=ctx.get_world_size())
     device = ray.train.torch.get_device()
+    metrics_queue = config["metrics_queue"]
+
+    # Captured on the training rank, not the driver: its GPU, threads and image are what count.
+    # At the start, so a run that fails (or is checkpointed) still carries it.
+    segment_env = None
+    if worker.is_leader and config["probe"] is not None:
+        segment_env = record_environment(spec, config["probe"].capture(spec))
+    resume_from, environment, resumes = None, segment_env, []
+    if config["resume"]:
+        resume_from, environment, earlier = _restore(worker)
+        resumes = [*earlier, ResumePoint(epoch=resume_from.epoch, environment=segment_env)]
+    start_info = {
+        "environment": environment.model_dump_json() if environment is not None else None,
+        "resumes": [r.model_dump_json() for r in resumes],
+    }
+    if worker.is_leader:
+        metrics_queue.put(("start", start_info))
+        for epoch, metrics in enumerate(resume_from.history if resume_from else [], start=1):
+            metrics_queue.put((epoch, metrics, False))  # driver's history only; already in the tracker
 
     data_check: list[EnvCheck] = []
-
-    metrics_queue = config["metrics_queue"]
 
     def on_epoch(epoch: int, metrics: dict[str, float]) -> None:
         if worker.is_leader:  # metrics are already all-reduced; one copy reaches the driver
             metrics_queue.put((epoch, metrics))
         # report() is a barrier: every rank calls it the same number of times.
         ray.train.report({"epoch": epoch, **metrics})
+
+    def on_checkpoint(state: TrainState) -> None:
+        d = tempfile.mkdtemp(prefix="mlops-ckpt-")
+        torch.save(state.rng, os.path.join(d, _RNG_FILE.format(rank=worker.rank)))
+        if worker.is_leader:
+            torch.save({
+                "epoch": state.epoch, "history": state.history, "world_size": worker.world_size,
+                "model": dict(state.model_state), "optimizer": state.optimizer_state, **start_info,
+            }, os.path.join(d, _TRAIN_STATE))
+        ray.train.report({"epoch": state.epoch, "checkpoint": 1.0}, checkpoint=Checkpoint.from_directory(d))
 
     model, history = train_worker(
         spec,
@@ -78,15 +124,13 @@ def _train_loop(config: dict[str, Any]) -> dict[str, Any] | None:
         wrap_model=ray.train.torch.prepare_model,
         on_epoch=on_epoch,
         on_data=data_check.append,
+        resume_from=resume_from,
+        checkpoint_every=config["checkpoint_every"],
+        on_checkpoint=on_checkpoint,
     )
 
     checkpoint = None
-    environment = None
     if worker.is_leader:
-        # Captured on the training rank, not the driver: its GPU, threads and image are what count.
-        probe = config["probe"]
-        if probe is not None:
-            environment = record_environment(spec, probe.capture(spec)).model_dump_json()
         d = tempfile.mkdtemp(prefix="mlops-ckpt-")
         torch.save(model.state_dict(), os.path.join(d, _STATE_FILE))
         checkpoint = Checkpoint.from_directory(d)
@@ -96,13 +140,38 @@ def _train_loop(config: dict[str, Any]) -> dict[str, Any] | None:
     return {
         "history": history,
         "device": str(device),
-        "environment": environment,
+        **start_info,
         "data_snapshot": data_check[0].model_dump_json() if data_check else None,
     }
 
 
+def _restore(worker: Worker) -> tuple[TrainState, EnvironmentRecord | None, list[ResumePoint]]:
+    """This rank's TrainState from Ray's latest checkpoint of the run (same name + storage)."""
+    ckpt = ray.train.get_checkpoint()
+    if ckpt is None:
+        raise RunnerError("no Ray checkpoint for this run to resume from")
+    with ckpt.as_directory() as d:
+        state_file, rng_file = Path(d) / _TRAIN_STATE, Path(d) / _RNG_FILE.format(rank=worker.rank)
+        if not state_file.exists():
+            raise RunnerError("the latest Ray checkpoint holds final weights only: the run already finished")
+        st = torch.load(state_file, map_location="cpu", weights_only=True)
+        if st["world_size"] != worker.world_size or not rng_file.exists():
+            raise RunnerError(
+                f"checkpoint was taken with {st['world_size']} workers, this run has {worker.world_size}"
+            )
+        rng = torch.load(rng_file, map_location="cpu", weights_only=True)
+    state = TrainState(epoch=st["epoch"], history=st["history"], model_state=st["model"],
+                       optimizer_state=st["optimizer"], rng=rng)
+    environment = EnvironmentRecord.model_validate_json(st["environment"]) if st["environment"] else None
+    return state, environment, [ResumePoint.model_validate_json(r) for r in st["resumes"]]
+
+
 class MetricsRelay:
     """Driver-side thread: ``(epoch, metrics)`` items from a queue -> ``tracker.log_metrics``.
+
+    ``(epoch, metrics, False)`` only joins ``history`` (epochs restored from a checkpoint are
+    already in the tracker); ``("start", info)`` is kept as ``start_info`` (environment and
+    resume points, so a run that fails still records them).
 
     The tracker is only touched from this thread while it runs, and from the caller after
     ``stop()``. A tracker error stops logging (training goes on) and is re-raised by ``stop()``.
@@ -111,6 +180,7 @@ class MetricsRelay:
     def __init__(self, source: Any, tracker: Tracker, *, poll: float = 0.2) -> None:
         self.source, self.tracker, self.poll = source, tracker, poll
         self.history: list[dict[str, float]] = []
+        self.start_info: dict[str, Any] | None = None
         self._error: BaseException | None = None
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._loop, name="mlops-ray-metrics", daemon=True)
@@ -139,10 +209,13 @@ class MetricsRelay:
                 continue
             self._handle(item)
 
-    def _handle(self, item: tuple[int, dict[str, float]]) -> None:
-        epoch, metrics = item
+    def _handle(self, item: tuple[Any, ...]) -> None:
+        if item[0] == "start":
+            self.start_info = item[1]
+            return
+        epoch, metrics, *rest = item
         self.history.append(metrics)
-        if self._error is None:
+        if self._error is None and (not rest or rest[0]):
             try:
                 self.tracker.log_metrics(metrics, step=epoch)
             except BaseException as e:  # noqa: BLE001 - surfaced by stop()
@@ -175,11 +248,24 @@ class RayLauncher:
         checkpoint_every: int | None = None,
         resume: bool = False,
     ) -> RunResult:
-        if checkpoint_every or resume:
-            # Needs per-rank RNG state and Ray's own checkpoint/restore.
-            raise RunnerError("checkpoint_every / resume are not supported by the Ray launcher yet")
         experiment_id = compute_experiment_id(spec)
         run_id = compute_run_id(experiment_id, spec.resources, attempt)
+        if checkpoint_every is not None and checkpoint_every < 1:
+            raise RunnerError(f"checkpoint_every must be >= 1, got {checkpoint_every}")
+        if (checkpoint_every or resume) and artifacts is None:
+            raise RunnerError("checkpoint_every / resume need an artifact store (spec.json + launch.json go there)")
+        storage = str(self.storage_path or Path(tempfile.gettempdir()) / "mlops-ray")
+        name = f"mlops-{run_id[:12]}-a{attempt}"
+        if resume:
+            assert artifacts is not None
+            _refuse_if_finished(artifacts, run_id)
+            if "://" not in storage and not any((Path(storage) / name).glob("checkpoint_*")):
+                raise RunnerError(f"no Ray checkpoint for run {run_id} under {Path(storage) / name}: nothing to resume")
+            if checkpoint_every is None:
+                try:
+                    checkpoint_every = load_launch(artifacts, run_id).checkpoint_every
+                except ArtifactError:
+                    pass
         res = spec.resources
         use_gpu = res.gpu > 0 and device != "cpu"
 
@@ -195,6 +281,13 @@ class RayLauncher:
 
         # Wrong data must not even start a run (as with the local runner); ranks re-check what they read.
         verify_data(spec, data)
+        if checkpoint_every:
+            assert artifacts is not None
+            # A killed driver never reaches save_bundle; `mlops resume` needs these to come back.
+            save_spec(artifacts, run_id, spec)
+            save_launch(artifacts, run_id, LaunchRecord(
+                launcher="ray", attempt=attempt, checkpoint_every=checkpoint_every, storage_path=storage,
+            ))
         # num_cpus=0: schedulable anywhere (a KubeRay head has num-cpus=0) and never competes
         # with the training workers for CPUs.
         metrics_queue = Queue(actor_options={"num_cpus": 0})
@@ -202,6 +295,8 @@ class RayLauncher:
             _train_loop,
             train_loop_config={
                 "metrics_queue": metrics_queue,
+                "checkpoint_every": checkpoint_every,
+                "resume": resume,
                 "spec": spec.model_dump_json(),
                 "data": data,
                 "probe": probe,
@@ -213,25 +308,30 @@ class RayLauncher:
                 use_gpu=use_gpu,
                 resources_per_worker={"CPU": res.cpu, **({"GPU": res.gpu} if use_gpu else {})},
             ),
-            run_config=RunConfig(
-                name=f"mlops-{run_id[:12]}-a{attempt}",
-                storage_path=str(self.storage_path or Path(tempfile.gettempdir()) / "mlops-ray"),
-            ),
+            # Same name + storage on resume: that is how Ray hands back the latest checkpoint.
+            run_config=RunConfig(name=name, storage_path=storage),
         )
 
         history: list[dict[str, float]] = []
         dev = "cuda" if use_gpu else "cpu"
         environment: EnvironmentRecord | None = None
+        resumes: list[ResumePoint] = []
         data_snapshot: EnvCheck | None = None
 
         def _manifest(status: RunStatus) -> RunManifest:
             return RunManifest(
                 experiment_id=experiment_id, run_id=run_id, attempt=attempt,
                 status=status, device=dev, history=history, environment=environment,
-                data_snapshot=data_snapshot,
+                data_snapshot=data_snapshot, resumes=resumes,
             )
 
-        tracker.start_run(run_id=run_id, experiment_id=experiment_id, spec=spec)
+        def _take_start_info(info: dict[str, Any] | None) -> None:
+            nonlocal environment, resumes
+            if info is not None:
+                environment = EnvironmentRecord.model_validate_json(info["environment"]) if info["environment"] else None
+                resumes = [ResumePoint.model_validate_json(r) for r in info["resumes"]]
+
+        tracker.start_run(run_id=run_id, experiment_id=experiment_id, spec=spec, resume=resume)
         relay = MetricsRelay(metrics_queue, tracker)
         relay.start()
         try:
@@ -242,8 +342,7 @@ class RayLauncher:
                 raise RunnerError("Ray run finished without rank 0 returning a history/checkpoint")
             history.extend(leader["history"])
             dev = leader["device"]
-            if leader["environment"] is not None:
-                environment = EnvironmentRecord.model_validate_json(leader["environment"])
+            _take_start_info(leader)
             if leader["data_snapshot"] is not None:
                 data_snapshot = EnvCheck.model_validate_json(leader["data_snapshot"])
             with result.checkpoint.as_directory() as d:
@@ -253,6 +352,7 @@ class RayLauncher:
                 history[:] = relay.stop()
             except BaseException:  # noqa: BLE001 - the training failure is the error to report
                 history[:] = relay.history
+            _take_start_info(relay.start_info)
             tracker.end_run("FAILED")
             if artifacts is not None:
                 save_bundle(artifacts, spec=spec, manifest=_manifest("FAILED"), model_state=None)
@@ -264,6 +364,15 @@ class RayLauncher:
             save_bundle(artifacts, spec=spec, manifest=_manifest("FINISHED"), model_state=state)
         return RunResult(
             experiment_id=experiment_id, run_id=run_id, device=dev, history=history,
-            environment=environment, data_snapshot=data_snapshot,
+            environment=environment, data_snapshot=data_snapshot, resumes=resumes,
         )
+
+
+def _refuse_if_finished(store: ArtifactStore, run_id: str) -> None:
+    try:
+        status = RunManifest.model_validate_json(store.get(run_id, MANIFEST)).status
+    except ArtifactError:
+        return
+    if status == "FINISHED":
+        raise RunnerError(f"run {run_id} already FINISHED; nothing to resume")
 

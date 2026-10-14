@@ -163,12 +163,6 @@ def test_metrics_are_aggregated_over_every_rank(launcher):
         assert result.final_metrics[f"val/{key}"] == pytest.approx(expected, abs=1e-6), key
 
 
-@pytest.mark.parametrize("kw", [{"checkpoint_every": 1}, {"resume": True}])
-def test_checkpoint_and_resume_are_refused_for_now(launcher, kw):
-    tracker = InMemoryTracker()
-    with pytest.raises(RunnerError, match="not supported by the Ray launcher yet"):
-        launcher.launch(_spec(workers=1), data=_data(), tracker=tracker, artifacts=InMemoryArtifactStore(), **kw)
-    assert tracker.runs == []
 
 
 # --- live metrics: rank 0 streams each epoch to the driver's tracker while training runs ---
@@ -281,3 +275,129 @@ def test_relay_survives_a_tracker_error_and_reraises_it_on_stop():
     q.put((1, {"train/loss": 1.0}))
     with pytest.raises(ConnectionError, match="mlflow down"):
         relay.stop()
+
+
+# --- checkpoint + resume through Ray Train's own checkpoints (per-rank RNG state) ---
+
+
+class _FailOnce(torch.utils.data.Dataset):
+    """Raises on access number ``after + 1`` (counted per worker process) unless ``marker``
+    exists; creates it when raising. So the first run dies, any later run is normal."""
+
+    def __init__(self, inner, after: int, marker: str) -> None:
+        self.inner, self.after, self.marker, self.seen = inner, after, marker, 0
+
+    def __len__(self):
+        return len(self.inner)
+
+    def __getitem__(self, i):
+        self.seen += 1
+        if self.seen > self.after and not Path(self.marker).exists():
+            Path(self.marker).touch()
+            raise RuntimeError("node preempted")
+        return self.inner[i]
+
+
+class FailOnceBlobs(SyntheticBlobs):
+    def __init__(self, after: int, marker: str) -> None:
+        super().__init__(n_train=4, n_val=2, shape=(8, 8, 8), in_channels=1, num_classes=2)
+        self.after, self.marker = after, marker
+
+    def load(self, dataset, preprocessing):
+        from mlops.ports.data import DataSplits
+
+        splits = super().load(dataset, preprocessing)
+        return DataSplits(train=_FailOnce(splits.train, self.after, self.marker), val=splits.val)
+
+
+def _resumable_spec():
+    base = _spec(workers=2, **{"training.epochs": 4})
+    return load_experiment_dict({
+        **base.model_dump(),
+        "augmentation": [{"name": "rand_flip", "params": {"prob": 0.5, "spatial_axis": [0, 1, 2]}}],
+    })
+
+
+def test_ray_run_resumes_from_its_checkpoint_bit_exactly(tmp_path):
+    from tests.test_environment import FixedProbe
+
+    spec = _resumable_spec()
+    ref_store = InMemoryArtifactStore()
+    ref = RayLauncher(storage_path=tmp_path / "ref").launch(spec, data=_data(), tracker=InMemoryTracker(),
+                                                         artifacts=ref_store)
+
+    launcher, store, tracker = RayLauncher(storage_path=tmp_path / "ray"), InMemoryArtifactStore(), InMemoryTracker()
+    # 2 ranks x 2 samples per epoch: access 5 is the first item of epoch 3 on each rank
+    data = FailOnceBlobs(after=4, marker=str(tmp_path / "preempted"))
+    with pytest.raises(Exception):
+        launcher.launch(spec, data=data, tracker=tracker, artifacts=store, checkpoint_every=1,
+                        probe=FixedProbe(commit_ok=True))
+    failed = load_bundle(store, ref.run_id).manifest
+    assert failed.status == "FAILED" and len(failed.history) == 2
+    assert failed.environment is not None  # recorded at the start now, so a failure keeps it
+
+    result = launcher.launch(spec, data=data, tracker=tracker, artifacts=store, resume=True,
+                             probe=FixedProbe(commit_ok=False))
+    assert result.run_id == ref.run_id
+    assert result.history == ref.history
+    a, b = load_bundle(ref_store, ref.run_id), load_bundle(store, result.run_id)
+    assert b.manifest.status == "FINISHED"
+    for k, v in a.model_state.items():
+        assert torch.equal(v, b.model_state[k]), k
+    assert [r.epoch for r in b.manifest.resumes] == [2]
+    assert b.manifest.environment.checks["code.commit"].status == "ok"  # first segment
+    assert b.manifest.resumes[0].environment.checks["code.commit"].status == "mismatch"
+    assert len(tracker.runs) == 1 and [s for s, _ in tracker.runs[0].metrics] == [1, 2, 3, 4]
+
+
+def test_ray_checkpointing_records_how_to_resume(tmp_path):
+    from mlops.application.bundle import LAUNCH, load_launch
+
+    store = InMemoryArtifactStore()
+    result = RayLauncher(storage_path=tmp_path / "ray").launch(
+        _spec(workers=1), data=_data(), tracker=InMemoryTracker(), artifacts=store, checkpoint_every=1)
+    assert LAUNCH in store.list(result.run_id)
+    launch = load_launch(store, result.run_id)
+    assert launch.launcher == "ray" and launch.attempt == 1 and launch.checkpoint_every == 1
+    assert launch.storage_path == str(tmp_path / "ray")
+
+
+def test_ray_resume_without_a_checkpoint_is_refused_before_starting(tmp_path):
+    tracker = InMemoryTracker()
+    with pytest.raises(RunnerError, match="no Ray checkpoint"):
+        RayLauncher(storage_path=tmp_path / "ray").launch(
+            _spec(workers=1), data=_data(), tracker=tracker, artifacts=InMemoryArtifactStore(), resume=True)
+    assert tracker.runs == []
+
+
+def test_ray_resume_of_a_finished_run_is_refused(tmp_path):
+    launcher, store = RayLauncher(storage_path=tmp_path / "ray"), InMemoryArtifactStore()
+    launcher.launch(_spec(workers=1), data=_data(), tracker=InMemoryTracker(), artifacts=store, checkpoint_every=1)
+    tracker = InMemoryTracker()
+    with pytest.raises(RunnerError, match="already FINISHED"):
+        launcher.launch(_spec(workers=1), data=_data(), tracker=tracker, artifacts=store, resume=True)
+    assert tracker.runs == []
+
+
+@pytest.mark.parametrize("kw", [{"checkpoint_every": 1}, {"resume": True}])
+def test_ray_checkpoint_and_resume_need_an_artifact_store(launcher, kw):
+    with pytest.raises(RunnerError, match="artifact store"):
+        launcher.launch(_spec(workers=1), data=_data(), tracker=InMemoryTracker(), **kw)
+
+
+def test_relay_keeps_history_only_items_out_of_the_tracker():
+    import queue
+
+    from mlops.adapters.ray_launcher import MetricsRelay
+
+    q: queue.Queue = queue.Queue()
+    tracker = InMemoryTracker()
+    tracker.start_run(run_id="r", experiment_id="e", spec=_spec(workers=1))
+    relay = MetricsRelay(q, tracker, poll=0.01)
+    relay.start()
+    q.put((1, {"train/loss": 1.0}, False))  # from the checkpoint: already in the tracker
+    q.put(("start", {"environment": None, "resumes": []}))
+    q.put((2, {"train/loss": 0.5}))
+    assert relay.stop() == [{"train/loss": 1.0}, {"train/loss": 0.5}]
+    assert [s for s, _ in tracker.current.metrics] == [2]
+    assert relay.start_info == {"environment": None, "resumes": []}

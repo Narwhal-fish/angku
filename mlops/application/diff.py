@@ -141,7 +141,7 @@ def diff_runs(store_a: ArtifactStore, run_a: str, store_b: ArtifactStore, run_b:
         experiment=_changes(_flatten(spec_a.fingerprint()), _flatten(spec_b.fingerprint())),
         run=run,
         labels=_changes(_flatten(_labels(spec_a)), _flatten(_labels(spec_b))),
-        environment=_environment(man_a, man_b),
+        environment=diff_environments(man_a, man_b),
         metrics=_metrics(man_a, man_b),
     )
 
@@ -169,7 +169,8 @@ def _labels(spec: ExperimentSpec) -> dict[str, Any]:
     }
 
 
-def _environment(a: RunManifest | None, b: RunManifest | None) -> list[Change]:
+def diff_environments(a: RunManifest | None, b: RunManifest | None) -> list[Change]:
+    """What differs between the environments two runs recorded (``manifest.environment.actual``)."""
     env_a = a.environment if a else None
     env_b = b.environment if b else None
     if env_a is None and env_b is None:

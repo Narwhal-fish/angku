@@ -432,11 +432,56 @@ def test_run_checkpoint_every_needs_artifacts(capsys):
     assert "--artifacts" in capsys.readouterr().err
 
 
-def test_run_checkpoint_every_refused_with_ray(tmp_path, capsys):
+class _FakeRayLauncher:
+    """Stands in for RayLauncher in CLI tests: records how it was built and launched."""
+
+    made: list[dict] = []
+    launched: list[dict] = []
+
+    def __init__(self, **kw):
+        _FakeRayLauncher.made.append(kw)
+
+    def launch(self, spec, **kw):
+        from mlops.application import run_experiment
+
+        _FakeRayLauncher.launched.append(dict(kw))
+        kw.pop("checkpoint_every", None), kw.pop("resume", None)
+        return run_experiment(spec, **kw)
+
+
+@pytest.fixture
+def fake_ray(monkeypatch):
+    import mlops.adapters.ray_launcher as rl
+
+    _FakeRayLauncher.made, _FakeRayLauncher.launched = [], []
+    monkeypatch.setattr(rl, "RayLauncher", _FakeRayLauncher)
+    return _FakeRayLauncher
+
+
+def test_run_checkpoint_every_goes_to_the_ray_launcher(tmp_path, capsys, fake_ray):
     rc = main(["run", str(SMOKE), "--tracker", "inmemory", "--artifacts", str(tmp_path),
-               "--launcher", "ray", "--checkpoint-every", "1"])
-    assert rc == 2
-    assert "local launcher" in capsys.readouterr().err
+               "--launcher", "ray", "--checkpoint-every", "3"])
+    assert rc == 0, capsys.readouterr().err
+    assert fake_ray.launched[0]["checkpoint_every"] == 3
+
+
+def test_resume_of_a_ray_run_goes_back_through_ray(tmp_path, capsys, fake_ray):
+    from mlops.adapters.local_artifacts import LocalArtifactStore
+    from mlops.application.bundle import LaunchRecord, save_launch, save_spec
+    from mlops.domain import compute_run_id
+
+    spec = load_experiment_yaml(SMOKE)
+    run_id = compute_run_id(compute_experiment_id(spec), spec.resources, 2)
+    store = LocalArtifactStore(tmp_path)
+    save_spec(store, run_id, spec)
+    save_launch(store, run_id, LaunchRecord(launcher="ray", attempt=2, checkpoint_every=1,
+                                            storage_path="/shared/ray"))
+    rc = main(["resume", run_id, "--artifacts", str(tmp_path), "--tracker", "inmemory",
+               "--ray-address", "ray://head:10001"])
+    assert rc == 0, capsys.readouterr().err
+    assert fake_ray.made[0]["storage_path"] == "/shared/ray"
+    assert fake_ray.made[0]["address"] == "ray://head:10001"
+    assert fake_ray.launched[0]["resume"] is True and fake_ray.launched[0]["attempt"] == 2
 
 
 def test_resume_finishes_a_killed_run(tmp_path, capsys, monkeypatch):
@@ -637,3 +682,18 @@ def test_rayjob_data_pvc_reaches_the_manifest(capsys):
 
 def test_rayjob_for_synthetic_data_needs_no_volume(capsys):
     assert main(["rayjob", str(SMOKE)]) == 0
+
+
+def test_not_reproduced_explains_with_environment_differences(finished_run, capsys, monkeypatch):
+    import mlops.cli as cli
+    from tests.test_environment import FixedProbe
+    from tests.test_reproduce import _edit_weights
+    from mlops.adapters.local_artifacts import LocalArtifactStore
+
+    art, run_id = finished_run
+    _edit_weights(LocalArtifactStore(art), run_id, delta=1.0)
+    monkeypatch.setattr(cli, "_probe", lambda: FixedProbe(commit_ok=False))
+    assert main(["reproduce", run_id, "--artifacts", str(art), "--tracker", "inmemory"]) == 1
+    out = capsys.readouterr().out
+    assert "NOT REPRODUCED" in out
+    assert "environment differences" in out and "code.changed" in out and "mlops/x.py" in out

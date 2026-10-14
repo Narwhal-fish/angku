@@ -6,7 +6,7 @@ ids exist for: did every FINISHED attempt of this ExperimentID end with the same
 metrics?
 
 Statuses: FINISHED / FAILED (from the manifest), INTERRUPTED (no manifest but a
-checkpoint: killed, resumable), INCOMPLETE (no manifest, no checkpoint), UNREADABLE
+checkpoint.pt or a Ray launch.json: killed, resumable), INCOMPLETE (no manifest, no checkpoint), UNREADABLE
 (spec or manifest does not parse; ``error`` says why). Directories without ``spec.json``
 are not runs and are skipped.
 """
@@ -19,7 +19,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from mlops.application.bundle import CHECKPOINT, MANIFEST, SPEC
+from mlops.application.bundle import CHECKPOINT, LAUNCH, MANIFEST, SPEC
 from mlops.domain.experiment import ExperimentSpec
 from mlops.domain.identity import compute_experiment_id
 from mlops.domain.manifest import RunManifest
@@ -115,7 +115,8 @@ def _summarise(store: ArtifactStore, run_id: str, files: list[str]) -> RunSummar
     except (ValidationError, ValueError) as e:
         return RunSummary(run_id=run_id, experiment_id="?", name="?", status="UNREADABLE",
                           error=str(e).splitlines()[0])
-    has_ckpt = CHECKPOINT in files
+    # local runs keep checkpoint.pt here; Ray runs keep theirs in Ray storage and leave launch.json
+    has_ckpt = CHECKPOINT in files or LAUNCH in files
     base = dict(
         run_id=run_id, experiment_id=compute_experiment_id(spec), name=spec.meta.name,
         epochs_total=spec.training.epochs, workers=spec.resources.workers,

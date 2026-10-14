@@ -170,3 +170,14 @@ def test_groups_follow_list_order(spec, store):
     groups = group_by_experiment(list_runs(store))
     assert len(groups) == 2
     assert all(len(g.runs) == 1 for g in groups)
+
+
+def test_killed_ray_run_with_launch_record_is_resumable(spec, store):
+    from mlops.application.bundle import LaunchRecord, save_launch
+
+    run_id = _run(store, spec)
+    store._runs[run_id].pop(MANIFEST)
+    store._runs[run_id].pop(MODEL)
+    save_launch(store, run_id, LaunchRecord(launcher="ray", attempt=1, checkpoint_every=1, storage_path="/s"))
+    (s,) = list_runs(store)
+    assert s.status == "INTERRUPTED" and s.resumable
