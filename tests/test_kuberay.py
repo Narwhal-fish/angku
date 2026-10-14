@@ -128,16 +128,16 @@ def test_rendered_manifest_is_plain_json(spec):
 
 
 class _FakeKubectl:
-    def __init__(self, returncode=0, stderr=""):
+    def __init__(self, returncode=0, stderr="", stdout="rayjob.ray.io/x created\n"):
         self.calls = []
-        self.returncode, self.stderr = returncode, stderr
+        self.returncode, self.stderr, self.stdout = returncode, stderr, stdout
 
     def __call__(self, cmd, *, input, capture_output, text):
         self.calls.append((cmd, input))
 
         class R:
             returncode = self.returncode
-            stdout = "rayjob.ray.io/x created\n"
+            stdout = self.stdout
             stderr = self.stderr
 
         return R()
@@ -361,8 +361,12 @@ def test_resume_job_runs_mlops_resume_for_the_same_run(spec):
     assert job["kind"] == "RayJob"
     assert job["metadata"]["annotations"] == fresh["metadata"]["annotations"]
     assert job["metadata"]["annotations"]["mlops.io/run-id"] == rid
-    # a new name: the first RayJob object may still exist (it is finished, not deleted)
-    assert job["metadata"]["name"] == fresh["metadata"]["name"] + "-resume"
+    # Kubernetes picks a fresh suffix per resume: the first RayJob (and earlier resumes) may
+    # still exist, finished, and no one has to delete them first.
+    assert "name" not in job["metadata"]
+    assert job["metadata"]["generateName"] == fresh["metadata"]["name"] + "-resume-"
+    # one selectable label ties every job of a run together (annotations cannot be selected)
+    assert job["metadata"]["labels"]["mlops.io/run"] == fresh["metadata"]["labels"]["mlops.io/run"] == rid[:32]
     entry = job["spec"]["entrypoint"]
     assert entry.startswith(f"mlops resume {rid} --artifacts /artifacts")
     assert "--data-root /data" in entry and "--mlflow-uri" not in entry
@@ -394,10 +398,33 @@ def test_entrypoint_is_accepted_by_the_mlops_cli(spec, mode):
     assert args.checkpoint_every == 3 and args.data_root == "/data" and args.artifacts == "/artifacts"
 
 
-def test_submit_can_create_instead_of_apply(spec):
-    # A resume job is created, never applied: `apply` on a leftover finished job of the same
-    # name would report "unchanged" and silently resume nothing.
-    kubectl = _FakeKubectl()
-    submit_rayjob(_resumable(spec, resume=True), run=kubectl, create=True)
+def test_resume_job_is_created_and_its_generated_name_returned(spec):
+    # `apply` cannot handle generateName; `create -o name` prints the name Kubernetes chose.
+    kubectl = _FakeKubectl(stdout="rayjob.ray.io/mlops-abc-a1-resume-x8k2p\n")
+    name = submit_rayjob(_resumable(spec, resume=True), run=kubectl)
     ((cmd, _),) = kubectl.calls
-    assert cmd == ["kubectl", "create", "-n", "default", "-f", "-"]
+    assert cmd == ["kubectl", "create", "-n", "default", "-o", "name", "-f", "-"]
+    assert name == "mlops-abc-a1-resume-x8k2p"
+
+
+def test_active_rayjobs_of_a_run_are_found_by_label(spec):
+    from mlops.adapters.kuberay import active_rayjobs
+
+    listing = json.dumps({"kind": "List", "items": [
+        json.loads(_rayjob_json(job_status="FAILED")) | {"metadata": {"name": "mlops-abc-a1"}},
+        json.loads(_rayjob_json(job_status="RUNNING")) | {"metadata": {"name": "mlops-abc-a1-resume-x8k2p"}},
+        json.loads(_rayjob_json(job_status="")) | {"metadata": {"name": "mlops-abc-a1-resume-q4z7d"}},  # just created
+    ]})
+    kubectl = _FakeGet(listing)
+    rid = compute_run_id(compute_experiment_id(spec), spec.resources, attempt=1)
+    active = active_rayjobs(rid, namespace="ml", run=kubectl)
+    assert [a.name for a in active] == ["mlops-abc-a1-resume-x8k2p", "mlops-abc-a1-resume-q4z7d"]
+    ((cmd, _),) = kubectl.calls
+    assert cmd == ["kubectl", "get", "rayjob", "-n", "ml", "-l", f"mlops.io/run={rid[:32]}", "-o", "json"]
+
+
+def test_active_rayjobs_reports_kubectl_failure():
+    from mlops.adapters.kuberay import active_rayjobs
+
+    with pytest.raises(KubeRayError, match="forbidden"):
+        active_rayjobs("r" * 64, run=_FakeGet(returncode=1, stderr="Error from server (Forbidden): forbidden"))

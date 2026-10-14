@@ -724,20 +724,52 @@ def test_rayjob_resumability_without_pvcs_exits_2(capsys, flags, hint, mode):
 def test_rayjob_resume_renders_one_rayjob_running_mlops_resume(capsys):
     assert main(["rayjob", str(BASELINE), *_RESUMABLE, "--attempt", "2", "--resume"]) == 0
     (job,) = json.loads(capsys.readouterr().out)["items"]
-    assert job["metadata"]["name"].endswith("-a2-resume")
+    assert job["metadata"]["generateName"].endswith("-a2-resume-")
     assert job["spec"]["entrypoint"].startswith("mlops resume " + job["metadata"]["annotations"]["mlops.io/run-id"])
 
 
-def test_rayjob_resume_submit_creates_and_explains_a_name_clash(capsys, monkeypatch):
-    calls = _fake_kubectl(monkeypatch)
-    assert main(["rayjob", str(BASELINE), *_RESUMABLE, "--resume", "--submit"]) == 0
-    assert calls[0][:2] == ["kubectl", "create"]
-    assert "mlops rayjob-status mlops-" in capsys.readouterr().out
+def _fake_cluster(monkeypatch, jobs=(), create_rc=0):
+    """kubectl: `get rayjob -l` lists ``jobs`` [(name, jobStatus)], `create` echoes a generated name."""
+    import mlops.cli as cli
 
-    _fake_kubectl(monkeypatch, returncode=1, stderr='Error from server (AlreadyExists): rayjobs.ray.io "x" already exists')
-    assert main(["rayjob", str(BASELINE), *_RESUMABLE, "--resume", "--submit", "--namespace", "ml"]) == 2
+    calls = []
+
+    def fake_run(cmd, **kw):
+        calls.append(cmd)
+
+        class R:
+            returncode, stderr = 0, ""
+            stdout = json.dumps({"kind": "List", "items": [
+                {"metadata": {"name": n}, "status": {"jobStatus": st}} for n, st in jobs]})
+
+        if "create" in cmd:
+            R.returncode = create_rc
+            R.stdout = "rayjob.ray.io/mlops-abc-a1-resume-x8k2p\n"
+            R.stderr = "boom" if create_rc else ""
+        return R()
+
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    return calls
+
+
+def test_rayjob_resume_submit_checks_then_creates(capsys, monkeypatch):
+    # Earlier jobs of the run are finished: no deleting, no renaming, just go.
+    calls = _fake_cluster(monkeypatch, jobs=[("mlops-abc-a1", "FAILED"), ("mlops-abc-a1-resume-aaaaa", "STOPPED")])
+    assert main(["rayjob", str(BASELINE), *_RESUMABLE, "--resume", "--submit", "--namespace", "ml"]) == 0
+    assert calls[0][:3] == ["kubectl", "get", "rayjob"] and "-l" in calls[0]
+    assert calls[1][:2] == ["kubectl", "create"]
+    out = capsys.readouterr().out
+    assert "submitted RayJob mlops-abc-a1-resume-x8k2p" in out
+    assert "mlops rayjob-status mlops-abc-a1-resume-x8k2p --namespace ml" in out
+
+
+def test_rayjob_resume_refuses_while_a_job_of_the_run_is_still_going(capsys, monkeypatch):
+    # Two jobs writing the same Ray checkpoints would corrupt the run: refuse, say which one.
+    calls = _fake_cluster(monkeypatch, jobs=[("mlops-abc-a1", "FAILED"), ("mlops-abc-a1-resume-aaaaa", "RUNNING")])
+    assert main(["rayjob", str(BASELINE), *_RESUMABLE, "--resume", "--submit"]) == 2
+    assert not any("create" in c for c in calls)
     err = capsys.readouterr().err
-    assert "AlreadyExists" in err and "kubectl delete rayjob mlops-" in err and "-n ml" in err
+    assert "mlops-abc-a1-resume-aaaaa" in err and "RUNNING" in err and "Traceback" not in err
 
 
 def test_rayjob_checkpointing_submit_says_how_to_resume(capsys, monkeypatch):

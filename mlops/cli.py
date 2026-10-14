@@ -49,6 +49,7 @@ from mlops.adapters.inmemory_artifacts import InMemoryArtifactStore
 from mlops.adapters.inmemory_tracker import InMemoryTracker
 from mlops.adapters.kuberay import (
     KubeRayError,
+    active_rayjobs,
     follow_rayjob_logs,
     rayjob_status,
     render_rayjob,
@@ -327,14 +328,17 @@ def cmd_rayjob(args: argparse.Namespace) -> int:
     if not args.submit:
         print(json.dumps({"apiVersion": "v1", "kind": "List", "items": items}, indent=2))
         return 0
+    kubectl = shlex.split(args.kubectl)
     try:
-        name = submit_rayjob(items, kubectl=shlex.split(args.kubectl), run=subprocess.run, create=args.resume)
+        if args.resume:
+            # Two jobs of one run would write the same Ray checkpoints: only resume a stopped run.
+            run_id = items[-1]["metadata"]["annotations"]["mlops.io/run-id"]
+            busy = active_rayjobs(run_id, namespace=args.namespace, kubectl=kubectl, run=subprocess.run)
+            if busy:
+                raise CliError("this run still has a RayJob that has not finished; wait for it or stop it first:\n  "
+                               + "\n  ".join(f"{j.name}: {j.job_status or 'no status yet'}" for j in busy))
+        name = submit_rayjob(items, kubectl=kubectl, run=subprocess.run)
     except (KubeRayError, OSError) as e:
-        if args.resume and "AlreadyExists" in str(e):
-            name = items[-1]["metadata"]["name"]
-            raise CliError(f"{e}\n  an earlier resume job of this run still exists; once it has finished, "
-                           f"delete it (its state is on the PVCs): {args.kubectl} delete rayjob {name} "
-                           f"-n {args.namespace}") from e
         raise CliError(str(e)) from e
     print(f"submitted RayJob {name} in namespace {args.namespace}")
     follow = f"--namespace {args.namespace}" + (f" --kubectl '{args.kubectl}'" if args.kubectl != "kubectl" else "")
@@ -614,7 +618,7 @@ def build_parser() -> argparse.ArgumentParser:
                          "(ReadWriteMany across nodes); passed as --ray-storage")
     rj.add_argument("--ray-storage-path", default="/ray-storage", help="mount path of that PVC inside the pods")
     rj.add_argument("--resume", action="store_true",
-                    help="render a RayJob (<name>-resume) that runs `mlops resume` for this spec + --attempt "
+                    help="render a RayJob (<name>-resume-<generated>) that runs `mlops resume` for this spec + --attempt "
                          "from the checkpoints on the PVCs; pass the same PVCs and paths as the first job")
     rj.add_argument("--submit", action="store_true", help="kubectl apply the manifest instead of printing it")
     rj.add_argument("--kubectl", default="kubectl", help='kubectl command, e.g. "kubectl --context prod"')

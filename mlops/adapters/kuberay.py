@@ -75,8 +75,9 @@ def render_rayjob(
     ``checkpoint_every`` makes the job resumable after ``shutdownAfterJobFinishes`` has deleted
     its cluster: Ray Train's checkpoints go to ``ray_storage_pvc`` (writable, mounted on every
     pod, so ReadWriteMany when pods span nodes) and ``spec.json`` + ``launch.json`` to
-    ``artifacts_pvc``; both are required. ``resume=True`` renders a RayJob named ``<name>-resume``
-    whose entrypoint is ``mlops resume RUN_ID``: spec, attempt, interval and storage path come
+    ``artifacts_pvc``; both are required. ``resume=True`` renders a RayJob with
+    ``generateName: <name>-resume-`` (Kubernetes adds a suffix, so earlier finished jobs of the run
+    never have to be deleted; submit with ``kubectl create``) whose entrypoint is ``mlops resume RUN_ID``: spec, attempt, interval and storage path come
     from those PVCs (so mount them at the same paths as the first job), no ConfigMap needed.
     """
     if not spec.is_pinned():
@@ -91,7 +92,7 @@ def render_rayjob(
             raise ValueError("a resumable RayJob needs ray_storage_pvc (Ray Train's checkpoints live there)")
     experiment_id = compute_experiment_id(spec)
     run_id = compute_run_id(experiment_id, spec.resources, attempt)
-    name = rayjob_name(run_id, attempt, resume=resume)
+    name = rayjob_name(run_id, attempt)
     res = spec.resources
     image = image_ref(spec.environment.image, spec.environment.image_digest)
 
@@ -147,7 +148,12 @@ def render_rayjob(
     metadata = {
         "name": name,
         "namespace": namespace,
-        "labels": {"app.kubernetes.io/managed-by": "mlops", "mlops.io/experiment": _label(spec.meta.name)},
+        "labels": {
+            "app.kubernetes.io/managed-by": "mlops",
+            "mlops.io/experiment": _label(spec.meta.name),
+            # Selectable (annotations are not): every job of a run, first and resumes, by `-l`.
+            RUN_LABEL: run_label(run_id),
+        },
         "annotations": {"mlops.io/experiment-id": experiment_id, "mlops.io/run-id": run_id},
     }
     configmap = {
@@ -156,10 +162,14 @@ def render_rayjob(
         "metadata": dict(metadata),
         "data": {SPEC_FILE: spec.model_dump_json(indent=2)},
     }
+    job_metadata = dict(metadata)
+    if resume:
+        del job_metadata["name"]
+        job_metadata["generateName"] = f"{name}-resume-"
     rayjob = {
         "apiVersion": "ray.io/v1",
         "kind": "RayJob",
-        "metadata": dict(metadata),
+        "metadata": job_metadata,
         "spec": {
             "entrypoint": " ".join(entrypoint),
             "shutdownAfterJobFinishes": True,
@@ -197,9 +207,16 @@ def render_rayjob(
     return [rayjob] if resume else [configmap, rayjob]
 
 
-def rayjob_name(run_id: str, attempt: int, *, resume: bool = False) -> str:
-    # A resume job needs its own name: the first RayJob object outlives its cluster.
-    return f"mlops-{run_id[:12]}-a{attempt}" + ("-resume" if resume else "")
+def rayjob_name(run_id: str, attempt: int) -> str:
+    return f"mlops-{run_id[:12]}-a{attempt}"
+
+
+RUN_LABEL = "mlops.io/run"
+
+
+def run_label(run_id: str) -> str:
+    # Label values are limited to 63 chars; 32 hex chars of a sha256 are still unique enough.
+    return run_id[:32]
 
 
 Runner = Callable[..., Any]  # subprocess.run-compatible
@@ -210,19 +227,28 @@ def submit_rayjob(
     *,
     kubectl: Sequence[str] = ("kubectl",),
     run: Runner = subprocess.run,
-    create: bool = False,
 ) -> str:
-    """``kubectl apply`` the rendered objects (``create`` instead: fail if the name exists);
-    returns the RayJob name. A resume job must be created: ``apply`` on a leftover finished
-    job of that name would say "unchanged" and resume nothing."""
+    """``kubectl apply`` the rendered objects; returns the RayJob name.
+
+    A resume job has ``generateName``, which ``apply`` cannot handle: it goes through
+    ``kubectl create -o name`` and the name Kubernetes generated is read back from its output.
+    """
     (job,) = [i for i in items if i["kind"] == "RayJob"]
     namespace = job["metadata"]["namespace"]
+    generated = "name" not in job["metadata"]
     body = json.dumps({"apiVersion": "v1", "kind": "List", "items": list(items)})
-    cmd = [*kubectl, "create" if create else "apply", "-n", namespace, "-f", "-"]
+    verb = ["create", "-n", namespace, "-o", "name"] if generated else ["apply", "-n", namespace]
+    cmd = [*kubectl, *verb, "-f", "-"]
     r = run(cmd, input=body, capture_output=True, text=True)
     if r.returncode != 0:
         raise KubeRayError(f"{' '.join(cmd)} failed ({r.returncode}): {r.stderr.strip()}")
-    return job["metadata"]["name"]
+    if not generated:
+        return job["metadata"]["name"]
+    for line in r.stdout.splitlines():  # e.g. rayjob.ray.io/mlops-...-resume-x8k2p
+        kind, _, created = line.strip().partition("/")
+        if kind.split(".")[0] == "rayjob":
+            return created
+    raise KubeRayError(f"{' '.join(cmd)}: no RayJob name in its output: {r.stdout.strip()!r}")
 
 
 # -- following a submitted job: kubectl's own status and log machinery, nothing rebuilt ----------
@@ -264,7 +290,10 @@ def rayjob_status(
     r = run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
         raise KubeRayError(f"{' '.join(cmd)} failed ({r.returncode}): {r.stderr.strip()}")
-    obj = json.loads(r.stdout)
+    return _parse_status(name, json.loads(r.stdout))
+
+
+def _parse_status(name: str, obj: dict[str, Any]) -> RayJobStatus:
     st = obj.get("status") or {}
     ann = (obj.get("metadata") or {}).get("annotations") or {}
     return RayJobStatus(
@@ -278,6 +307,20 @@ def rayjob_status(
         run_id=ann.get("mlops.io/run-id"),
         experiment_id=ann.get("mlops.io/experiment-id"),
     )
+
+
+def active_rayjobs(
+    run_id: str, *, namespace: str = "default", kubectl: Sequence[str] = ("kubectl",), run: Runner = subprocess.run
+) -> list[RayJobStatus]:
+    """RayJobs of this run (by ``mlops.io/run`` label) that have not finished: pending, running,
+    or just created with no status yet. Two of them would write the same Ray checkpoints.
+    Jobs rendered before the label existed are not found."""
+    cmd = [*kubectl, "get", "rayjob", "-n", namespace, "-l", f"{RUN_LABEL}={run_label(run_id)}", "-o", "json"]
+    r = run(cmd, capture_output=True, text=True)
+    if r.returncode != 0:
+        raise KubeRayError(f"{' '.join(cmd)} failed ({r.returncode}): {r.stderr.strip()}")
+    jobs = [_parse_status(obj["metadata"]["name"], obj) for obj in json.loads(r.stdout).get("items", [])]
+    return [j for j in jobs if not j.finished]
 
 
 def follow_rayjob_logs(
