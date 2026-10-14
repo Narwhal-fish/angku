@@ -10,6 +10,8 @@ concrete adapters (tracker, data provider, artifact store) and hands them to
                                  [--device cpu] [--checkpoint-every N] [--json]
     mlops rayjob experiment.yaml [--namespace NS] [--artifacts-pvc PVC] [--attempt N]
                                  [--submit [--kubectl "kubectl --context X"]]
+    mlops rayjob-status NAME [--namespace NS] [--kubectl CMD] [--json]
+    mlops rayjob-logs   NAME [--namespace NS] [--kubectl CMD] [-f]
     mlops reproduce RUN_ID --artifacts DIR [--data-root DIR] [--tracker mlflow|inmemory] [--mlflow-uri URI]
                                  [--device cpu] [--atol X] [--json]
     mlops report RUN_ID --artifacts DIR [--out FILE]
@@ -44,7 +46,13 @@ from typing import Any
 
 from mlops.adapters.inmemory_artifacts import InMemoryArtifactStore
 from mlops.adapters.inmemory_tracker import InMemoryTracker
-from mlops.adapters.kuberay import KubeRayError, render_rayjob, submit_rayjob
+from mlops.adapters.kuberay import (
+    KubeRayError,
+    follow_rayjob_logs,
+    rayjob_status,
+    render_rayjob,
+    submit_rayjob,
+)
 from mlops.adapters.local_artifacts import LocalArtifactStore
 from mlops.adapters.local_environment import LocalEnvironmentProbe
 from mlops.adapters.synthetic_data import SyntheticBlobs
@@ -294,7 +302,34 @@ def cmd_rayjob(args: argparse.Namespace) -> int:
     except (KubeRayError, OSError) as e:
         raise CliError(str(e)) from e
     print(f"submitted RayJob {name} in namespace {args.namespace}")
+    follow = f"--namespace {args.namespace}" + (f" --kubectl '{args.kubectl}'" if args.kubectl != "kubectl" else "")
+    print(f"  status: mlops rayjob-status {name} {follow}")
+    print(f"  logs:   mlops rayjob-logs {name} {follow} -f")
     return 0
+
+
+def cmd_rayjob_status(args: argparse.Namespace) -> int:
+    try:
+        st = rayjob_status(args.name, namespace=args.namespace, kubectl=shlex.split(args.kubectl), run=subprocess.run)
+    except (KubeRayError, OSError) as e:
+        raise CliError(str(e)) from e
+    if args.json:
+        print(json.dumps(st.to_dict(), indent=2))
+    else:
+        print(f"{st.name}: {st.job_status or 'no status yet'} (deployment {st.deployment_status or '-'})")
+        for label, value in (("run_id", st.run_id), ("experiment_id", st.experiment_id), ("message", st.message),
+                             ("dashboard", st.dashboard_url), ("started", st.start_time), ("ended", st.end_time)):
+            if value:
+                print(f"  {label:<14} {value}")
+    return 1 if st.finished and not st.succeeded else 0
+
+
+def cmd_rayjob_logs(args: argparse.Namespace) -> int:
+    try:
+        return follow_rayjob_logs(args.name, namespace=args.namespace, follow=args.follow,
+                                  kubectl=shlex.split(args.kubectl), run=subprocess.run)
+    except OSError as e:
+        raise CliError(str(e)) from e
 
 
 def cmd_reproduce(args: argparse.Namespace) -> int:
@@ -514,6 +549,21 @@ def build_parser() -> argparse.ArgumentParser:
     rj.add_argument("--submit", action="store_true", help="kubectl apply the manifest instead of printing it")
     rj.add_argument("--kubectl", default="kubectl", help='kubectl command, e.g. "kubectl --context prod"')
     rj.set_defaults(func=cmd_rayjob)
+
+    rs_ = sub.add_parser("rayjob-status", help="state of a submitted RayJob (kubectl get); "
+                                              "exit 0 succeeded or still going, 1 failed/stopped")
+    rs_.add_argument("name", help="RayJob name, as printed by `mlops rayjob --submit`")
+    rs_.add_argument("--namespace", default="default")
+    rs_.add_argument("--kubectl", default="kubectl", help='kubectl command, e.g. "kubectl --context prod"')
+    rs_.add_argument("--json", action="store_true", help="machine-readable status on stdout")
+    rs_.set_defaults(func=cmd_rayjob_status)
+
+    rl = sub.add_parser("rayjob-logs", help="driver log of a submitted RayJob (kubectl logs job/NAME)")
+    rl.add_argument("name", help="RayJob name, as printed by `mlops rayjob --submit`")
+    rl.add_argument("--namespace", default="default")
+    rl.add_argument("--kubectl", default="kubectl", help='kubectl command, e.g. "kubectl --context prod"')
+    rl.add_argument("-f", "--follow", action="store_true", help="keep streaming until the job ends")
+    rl.set_defaults(func=cmd_rayjob_logs)
 
     rp = sub.add_parser("reproduce", help="re-run a bundle and check run_id, history and weights match")
     rp.add_argument("run_id", help="run to verify; its bundle must be under --artifacts")

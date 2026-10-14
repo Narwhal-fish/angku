@@ -554,3 +554,69 @@ def test_list_no_match_says_so(tmp_path, capsys):
     tmp_path.joinpath("artifacts").mkdir()
     assert main(["list", "--artifacts", str(tmp_path / "artifacts")]) == 0
     assert "no runs" in capsys.readouterr().out
+
+
+# --- following a RayJob ---
+#
+# `mlops rayjob-status NAME`: exit 0 succeeded or still going / 1 failed or stopped / 2 kubectl error.
+
+
+def _fake_kubectl(monkeypatch, stdout="", returncode=0, stderr=""):
+    import mlops.cli as cli
+
+    calls = []
+
+    def fake_run(cmd, **kw):
+        calls.append(cmd)
+
+        class R:
+            pass
+
+        R.returncode, R.stdout, R.stderr = returncode, stdout, stderr
+        return R()
+
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    return calls
+
+
+def _job(status, deployment="Running", message=""):
+    return json.dumps({"kind": "RayJob", "metadata": {"name": "mlops-abc-a1", "annotations": {"mlops.io/run-id": "r" * 64}},
+                       "status": {"jobStatus": status, "jobDeploymentStatus": deployment, "message": message}})
+
+
+@pytest.mark.parametrize("status,rc", [("RUNNING", 0), ("SUCCEEDED", 0), ("FAILED", 1), ("STOPPED", 1)])
+def test_rayjob_status_exit_codes(monkeypatch, capsys, status, rc):
+    calls = _fake_kubectl(monkeypatch, _job(status, message="boom" if status == "FAILED" else ""))
+    assert main(["rayjob-status", "mlops-abc-a1", "--namespace", "ml", "--kubectl", "kubectl --context dev"]) == rc
+    assert calls[0][:3] == ["kubectl", "--context", "dev"]
+    out = capsys.readouterr().out
+    assert status in out and ("r" * 12) in out
+    if status == "FAILED":
+        assert "boom" in out
+
+
+def test_rayjob_status_json(monkeypatch, capsys):
+    _fake_kubectl(monkeypatch, _job("SUCCEEDED", "Complete"))
+    assert main(["rayjob-status", "mlops-abc-a1", "--json"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["job_status"] == "SUCCEEDED" and out["run_id"] == "r" * 64
+
+
+def test_rayjob_status_kubectl_error_exits_2(monkeypatch, capsys):
+    _fake_kubectl(monkeypatch, returncode=1, stderr="Error from server (NotFound)")
+    assert main(["rayjob-status", "nope"]) == 2
+    err = capsys.readouterr().err
+    assert "NotFound" in err and "Traceback" not in err
+
+
+def test_rayjob_logs_follows_and_passes_the_exit_code(monkeypatch):
+    calls = _fake_kubectl(monkeypatch, returncode=0)
+    assert main(["rayjob-logs", "mlops-abc-a1", "--namespace", "ml", "-f"]) == 0
+    assert calls == [["kubectl", "logs", "-n", "ml", "job/mlops-abc-a1", "--follow"]]
+
+
+def test_rayjob_submit_says_how_to_follow_it(capsys, monkeypatch):
+    _fake_kubectl(monkeypatch)
+    assert main(["rayjob", str(BASELINE), "--submit", "--namespace", "ml"]) == 0
+    out = capsys.readouterr().out
+    assert "mlops rayjob-status mlops-" in out and "mlops rayjob-logs mlops-" in out and "--namespace ml" in out

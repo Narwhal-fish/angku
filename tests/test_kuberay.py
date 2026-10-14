@@ -174,3 +174,91 @@ def test_pods_know_which_image_they_run_in(spec):
     for c in (head, worker):
         env = {e["name"]: e["value"] for e in c.get("env", [])}
         assert env["MLOPS_IMAGE_DIGEST"] == spec.environment.image_digest
+
+
+# --- following a submitted RayJob: status via `kubectl get`, logs via `kubectl logs` ---
+
+
+def _rayjob_json(job_status="RUNNING", deployment="Running", message="", **status):
+    return json.dumps({
+        "kind": "RayJob",
+        "metadata": {
+            "name": "mlops-abc-a1", "namespace": "ml",
+            "annotations": {"mlops.io/run-id": "r" * 64, "mlops.io/experiment-id": "e" * 64},
+        },
+        "status": {"jobStatus": job_status, "jobDeploymentStatus": deployment, "message": message,
+                   "dashboardURL": "head-svc:8265", "startTime": "2026-10-13T10:00:00Z", **status},
+    })
+
+
+class _FakeGet:
+    def __init__(self, stdout="", returncode=0, stderr=""):
+        self.calls = []
+        self.stdout, self.returncode, self.stderr = stdout, returncode, stderr
+
+    def __call__(self, cmd, **kw):
+        self.calls.append((cmd, kw))
+        out = self
+
+        class R:
+            returncode, stdout, stderr = out.returncode, out.stdout, out.stderr
+
+        return R()
+
+
+def test_status_reads_the_rayjob_through_kubectl():
+    from mlops.adapters.kuberay import rayjob_status
+
+    kubectl = _FakeGet(_rayjob_json(endTime="2026-10-13T11:00:00Z", job_status="SUCCEEDED", deployment="Complete"))
+    s = rayjob_status("mlops-abc-a1", namespace="ml", kubectl=["kubectl", "--context", "x"], run=kubectl)
+    ((cmd, kw),) = kubectl.calls
+    assert cmd == ["kubectl", "--context", "x", "get", "rayjob", "mlops-abc-a1", "-n", "ml", "-o", "json"]
+    assert kw["capture_output"] is True
+    assert s.job_status == "SUCCEEDED" and s.deployment_status == "Complete"
+    assert s.run_id == "r" * 64 and s.experiment_id == "e" * 64
+    assert s.finished and s.succeeded
+    assert s.dashboard_url == "head-svc:8265" and s.end_time == "2026-10-13T11:00:00Z"
+
+
+@pytest.mark.parametrize("job,finished,succeeded", [
+    ("PENDING", False, False), ("RUNNING", False, False), ("SUCCEEDED", True, True),
+    ("FAILED", True, False), ("STOPPED", True, False), ("", False, False),
+])
+def test_status_terminal_states(job, finished, succeeded):
+    from mlops.adapters.kuberay import rayjob_status
+
+    s = rayjob_status("x", run=_FakeGet(_rayjob_json(job_status=job)))
+    assert (s.finished, s.succeeded) == (finished, succeeded)
+
+
+def test_status_of_a_fresh_job_without_status_block():
+    from mlops.adapters.kuberay import rayjob_status
+
+    s = rayjob_status("x", run=_FakeGet(json.dumps({"kind": "RayJob", "metadata": {"name": "x"}})))
+    assert s.job_status == "" and not s.finished and s.run_id is None
+
+
+def test_status_reports_kubectl_failure():
+    from mlops.adapters.kuberay import rayjob_status
+
+    with pytest.raises(KubeRayError, match="NotFound"):
+        rayjob_status("x", run=_FakeGet(returncode=1, stderr='Error from server (NotFound): rayjobs "x" not found'))
+
+
+def test_logs_stream_the_submitter_job_without_capturing():
+    from mlops.adapters.kuberay import follow_rayjob_logs
+
+    kubectl = _FakeGet()
+    assert follow_rayjob_logs("mlops-abc-a1", namespace="ml", follow=True, run=kubectl) == 0
+    ((cmd, kw),) = kubectl.calls
+    # KubeRay submits through a Kubernetes Job named like the RayJob; its pod tails the driver log.
+    assert cmd == ["kubectl", "logs", "-n", "ml", "job/mlops-abc-a1", "--follow"]
+    assert not kw.get("capture_output")
+
+
+def test_logs_without_follow_and_exit_code_passthrough():
+    from mlops.adapters.kuberay import follow_rayjob_logs
+
+    kubectl = _FakeGet(returncode=1)
+    assert follow_rayjob_logs("x", run=kubectl) == 1
+    assert "--follow" not in kubectl.calls[0][0]

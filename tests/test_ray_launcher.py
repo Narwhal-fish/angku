@@ -169,3 +169,115 @@ def test_checkpoint_and_resume_are_refused_for_now(launcher, kw):
     with pytest.raises(RunnerError, match="not supported by the Ray launcher yet"):
         launcher.launch(_spec(workers=1), data=_data(), tracker=tracker, artifacts=InMemoryArtifactStore(), **kw)
     assert tracker.runs == []
+
+
+# --- live metrics: rank 0 streams each epoch to the driver's tracker while training runs ---
+
+
+class _Gate(torch.utils.data.Dataset):
+    """Wraps a train split. From the first item of epoch 2 on, waits for ``gate`` to exist
+    (or raises, with ``fail``). Counting happens in the worker process."""
+
+    def __init__(self, inner, gate: str, fail: bool) -> None:
+        self.inner, self.gate, self.fail, self.seen = inner, gate, fail, 0
+
+    def __len__(self):
+        return len(self.inner)
+
+    def __getitem__(self, i):
+        import time
+
+        self.seen += 1
+        if self.seen > len(self.inner):  # epoch 2
+            if self.fail:
+                raise RuntimeError("disk on fire in epoch 2")
+            deadline = time.monotonic() + 60
+            while not Path(self.gate).exists():
+                if time.monotonic() > deadline:
+                    raise TimeoutError("epoch 1 metrics never reached the driver's tracker")
+                time.sleep(0.05)
+        return self.inner[i]
+
+
+class GatedBlobs(SyntheticBlobs):
+    def __init__(self, gate: str, fail: bool = False) -> None:
+        super().__init__(n_train=4, n_val=2, shape=(8, 8, 8), in_channels=1, num_classes=2)
+        self.gate, self.fail = gate, fail
+
+    def load(self, dataset, preprocessing):
+        from mlops.ports.data import DataSplits
+
+        splits = super().load(dataset, preprocessing)
+        return DataSplits(train=_Gate(splits.train, self.gate, self.fail), val=splits.val)
+
+
+class GateTracker(InMemoryTracker):
+    """Opens the gate when epoch 1 arrives."""
+
+    def __init__(self, gate: str) -> None:
+        super().__init__()
+        self.gate = gate
+
+    def log_metrics(self, metrics, *, step):
+        super().log_metrics(metrics, step=step)
+        if step == 1:
+            Path(self.gate).touch()
+
+
+def test_metrics_reach_the_tracker_while_training(launcher, tmp_path):
+    gate = str(tmp_path / "epoch1-logged")
+    spec = _spec(workers=1, **{"training.epochs": 3})
+    tracker = GateTracker(gate)
+    result = launcher.launch(spec, data=GatedBlobs(gate), tracker=tracker)
+    # Epoch 2 only ran because epoch 1 was already in the tracker: logging is live, not replayed.
+    run = tracker.runs[0]
+    assert run.metrics == [(e, m) for e, m in enumerate(result.history, start=1)]  # once each, in order
+    assert run.status == "FINISHED"
+
+
+def test_failed_ray_run_keeps_the_epochs_it_finished(launcher, tmp_path):
+    spec = _spec(workers=1, **{"training.epochs": 3})
+    tracker, store = InMemoryTracker(), InMemoryArtifactStore()
+    with pytest.raises(Exception):
+        launcher.launch(spec, data=GatedBlobs(str(tmp_path / "unused"), fail=True), tracker=tracker, artifacts=store)
+    run = tracker.runs[0]
+    assert run.status == "FAILED"
+    assert [step for step, _ in run.metrics] == [1]
+    manifest = load_bundle(store, run.run_id).manifest
+    assert manifest.status == "FAILED" and len(manifest.history) == 1
+    assert manifest.history[0] == run.metrics[0][1]
+
+
+def test_relay_logs_in_order_and_drains_on_stop():
+    import queue
+
+    from mlops.adapters.ray_launcher import MetricsRelay
+
+    q: queue.Queue = queue.Queue()
+    tracker = InMemoryTracker()
+    tracker.start_run(run_id="r", experiment_id="e", spec=_spec(workers=1))
+    relay = MetricsRelay(q, tracker, poll=0.01)
+    relay.start()
+    q.put((1, {"train/loss": 1.0}))
+    q.put((2, {"train/loss": 0.5}))
+    q.put((3, {"train/loss": 0.25}))  # may still be queued when stop() is called
+    history = relay.stop()
+    assert history == [{"train/loss": 1.0}, {"train/loss": 0.5}, {"train/loss": 0.25}]
+    assert [s for s, _ in tracker.current.metrics] == [1, 2, 3]
+
+
+def test_relay_survives_a_tracker_error_and_reraises_it_on_stop():
+    import queue
+
+    from mlops.adapters.ray_launcher import MetricsRelay
+
+    class Broken(InMemoryTracker):
+        def log_metrics(self, metrics, *, step):
+            raise ConnectionError("mlflow down")
+
+    q: queue.Queue = queue.Queue()
+    relay = MetricsRelay(q, Broken(), poll=0.01)
+    relay.start()
+    q.put((1, {"train/loss": 1.0}))
+    with pytest.raises(ConnectionError, match="mlflow down"):
+        relay.stop()

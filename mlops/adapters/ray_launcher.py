@@ -2,11 +2,12 @@
 
 Every rank runs ``mlops.application.runner.train_worker``; Ray supplies the
 process group, the device and DDP (``prepare_model``). The Tracker and the
-ArtifactStore stay on the driver: rank 0 returns its history and ships the
-final ``state_dict`` back as a Ray checkpoint, and the driver replays the
-history into the tracker and writes the bundle. Metrics therefore reach the
-tracker after ``fit()`` returns, not live (per-epoch ``ray.train.report`` is
-still called so the Ray dashboard shows progress).
+ArtifactStore stay on the driver. Metrics are live: rank 0 puts each epoch on a
+``ray.util.queue.Queue`` and a ``MetricsRelay`` thread on the driver logs it into
+the tracker while ``fit()`` runs (so a run that dies in epoch 7 still shows
+epochs 1-6, in MLflow and in its FAILED manifest). Rank 0 returns its history and
+ships the final ``state_dict`` back as a Ray checkpoint; the driver writes the
+bundle. Per-epoch ``ray.train.report`` is still called for Ray's own dashboard.
 
 On Kubernetes the same class runs inside a KubeRay ``RayJob`` whose entrypoint
 is ``mlops run --launcher ray``; see ``mlops.adapters.kuberay``.
@@ -17,8 +18,10 @@ Requires the ``distributed`` extra; the core never imports ray.
 from __future__ import annotations
 
 import os
+import queue
 import sys
 import tempfile
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +31,7 @@ import ray.train.torch
 import torch
 from ray.train import Checkpoint, RunConfig, ScalingConfig
 from ray.train.torch import TorchTrainer
+from ray.util.queue import Queue
 
 from mlops.application.bundle import save_bundle
 from mlops.application.runner import RunnerError, RunResult, Worker, train_worker, verify_data
@@ -58,7 +62,11 @@ def _train_loop(config: dict[str, Any]) -> dict[str, Any] | None:
 
     data_check: list[EnvCheck] = []
 
+    metrics_queue = config["metrics_queue"]
+
     def on_epoch(epoch: int, metrics: dict[str, float]) -> None:
+        if worker.is_leader:  # metrics are already all-reduced; one copy reaches the driver
+            metrics_queue.put((epoch, metrics))
         # report() is a barrier: every rank calls it the same number of times.
         ray.train.report({"epoch": epoch, **metrics})
 
@@ -91,6 +99,54 @@ def _train_loop(config: dict[str, Any]) -> dict[str, Any] | None:
         "environment": environment,
         "data_snapshot": data_check[0].model_dump_json() if data_check else None,
     }
+
+
+class MetricsRelay:
+    """Driver-side thread: ``(epoch, metrics)`` items from a queue -> ``tracker.log_metrics``.
+
+    The tracker is only touched from this thread while it runs, and from the caller after
+    ``stop()``. A tracker error stops logging (training goes on) and is re-raised by ``stop()``.
+    """
+
+    def __init__(self, source: Any, tracker: Tracker, *, poll: float = 0.2) -> None:
+        self.source, self.tracker, self.poll = source, tracker, poll
+        self.history: list[dict[str, float]] = []
+        self._error: BaseException | None = None
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._loop, name="mlops-ray-metrics", daemon=True)
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def stop(self) -> list[dict[str, float]]:
+        """Stop, log whatever is still queued, return every epoch received (in order)."""
+        self._stop.set()
+        self._thread.join()
+        while True:
+            try:
+                self._handle(self.source.get_nowait())
+            except queue.Empty:  # ray.util.queue.Empty subclasses it
+                break
+        if self._error is not None:
+            raise self._error
+        return self.history
+
+    def _loop(self) -> None:
+        while not self._stop.is_set():
+            try:
+                item = self.source.get(timeout=self.poll)
+            except queue.Empty:
+                continue
+            self._handle(item)
+
+    def _handle(self, item: tuple[int, dict[str, float]]) -> None:
+        epoch, metrics = item
+        self.history.append(metrics)
+        if self._error is None:
+            try:
+                self.tracker.log_metrics(metrics, step=epoch)
+            except BaseException as e:  # noqa: BLE001 - surfaced by stop()
+                self._error = e
 
 
 class RayLauncher:
@@ -137,9 +193,15 @@ class RayLauncher:
                     f"{have:g} GPU(s); pass device='cpu' to override"
                 )
 
+        # Wrong data must not even start a run (as with the local runner); ranks re-check what they read.
+        verify_data(spec, data)
+        # num_cpus=0: schedulable anywhere (a KubeRay head has num-cpus=0) and never competes
+        # with the training workers for CPUs.
+        metrics_queue = Queue(actor_options={"num_cpus": 0})
         trainer = TorchTrainer(
             _train_loop,
             train_loop_config={
+                "metrics_queue": metrics_queue,
                 "spec": spec.model_dump_json(),
                 "data": data,
                 "probe": probe,
@@ -169,11 +231,12 @@ class RayLauncher:
                 data_snapshot=data_snapshot,
             )
 
-        # Wrong data must not even start a run (as with the local runner); ranks re-check what they read.
-        verify_data(spec, data)
         tracker.start_run(run_id=run_id, experiment_id=experiment_id, spec=spec)
+        relay = MetricsRelay(metrics_queue, tracker)
+        relay.start()
         try:
             result = trainer.fit()
+            relay.stop()
             leader = result.return_value
             if not leader or result.checkpoint is None:
                 raise RunnerError("Ray run finished without rank 0 returning a history/checkpoint")
@@ -186,13 +249,16 @@ class RayLauncher:
             with result.checkpoint.as_directory() as d:
                 state = torch.load(Path(d) / _STATE_FILE, map_location="cpu", weights_only=True)
         except BaseException:
+            try:  # keep every epoch that did finish, in the tracker and the FAILED manifest
+                history[:] = relay.stop()
+            except BaseException:  # noqa: BLE001 - the training failure is the error to report
+                history[:] = relay.history
             tracker.end_run("FAILED")
             if artifacts is not None:
                 save_bundle(artifacts, spec=spec, manifest=_manifest("FAILED"), model_state=None)
             raise
-
-        for epoch, metrics in enumerate(history, start=1):
-            tracker.log_metrics(metrics, step=epoch)
+        finally:
+            metrics_queue.shutdown()
         tracker.end_run("FINISHED")
         if artifacts is not None:
             save_bundle(artifacts, spec=spec, manifest=_manifest("FINISHED"), model_state=state)

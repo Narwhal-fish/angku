@@ -9,7 +9,9 @@ reproducibility is already pinned in the spec: the image by digest, the code
 by commit (baked into that image), the data by snapshot.
 
 Rendering is pure (dicts in, dicts out) and needs no cluster; ``submit_rayjob``
-shells out to ``kubectl apply`` with an injectable runner so it is testable.
+shells out to ``kubectl apply`` with an injectable runner so it is testable. Following a
+job afterwards (``rayjob_status``, ``follow_rayjob_logs``) is likewise kubectl's own
+``get`` / ``logs --follow``: no polling loop or retry logic of ours.
 """
 
 from __future__ import annotations
@@ -18,6 +20,7 @@ import json
 import re
 import subprocess
 from collections.abc import Callable, Sequence
+from dataclasses import asdict, dataclass
 from typing import Any
 
 from mlops.domain.errors import UnpinnedInputError
@@ -166,3 +169,78 @@ def submit_rayjob(
     if r.returncode != 0:
         raise KubeRayError(f"{' '.join(cmd)} failed ({r.returncode}): {r.stderr.strip()}")
     return job["metadata"]["name"]
+
+
+# -- following a submitted job: kubectl's own status and log machinery, nothing rebuilt ----------
+
+_TERMINAL = {"SUCCEEDED", "FAILED", "STOPPED"}
+
+
+@dataclass(frozen=True)
+class RayJobStatus:
+    """What the KubeRay operator reports in ``.status`` (empty strings until it has reported)."""
+
+    name: str
+    job_status: str  # Ray job: PENDING / RUNNING / SUCCEEDED / FAILED / STOPPED
+    deployment_status: str  # the RayJob CR: Initializing / Running / Complete / Failed / ...
+    message: str = ""
+    dashboard_url: str = ""
+    start_time: str = ""
+    end_time: str = ""
+    run_id: str | None = None  # from our annotations: which mlops run this job is
+    experiment_id: str | None = None
+
+    @property
+    def finished(self) -> bool:
+        return self.job_status in _TERMINAL
+
+    @property
+    def succeeded(self) -> bool:
+        return self.job_status == "SUCCEEDED"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {**asdict(self), "finished": self.finished, "succeeded": self.succeeded}
+
+
+def rayjob_status(
+    name: str, *, namespace: str = "default", kubectl: Sequence[str] = ("kubectl",), run: Runner = subprocess.run
+) -> RayJobStatus:
+    """``kubectl get rayjob NAME -o json``, parsed. Raise ``KubeRayError`` if kubectl fails."""
+    cmd = [*kubectl, "get", "rayjob", name, "-n", namespace, "-o", "json"]
+    r = run(cmd, capture_output=True, text=True)
+    if r.returncode != 0:
+        raise KubeRayError(f"{' '.join(cmd)} failed ({r.returncode}): {r.stderr.strip()}")
+    obj = json.loads(r.stdout)
+    st = obj.get("status") or {}
+    ann = (obj.get("metadata") or {}).get("annotations") or {}
+    return RayJobStatus(
+        name=name,
+        job_status=st.get("jobStatus", ""),
+        deployment_status=st.get("jobDeploymentStatus", ""),
+        message=st.get("message", ""),
+        dashboard_url=st.get("dashboardURL", ""),
+        start_time=st.get("startTime", ""),
+        end_time=st.get("endTime", ""),
+        run_id=ann.get("mlops.io/run-id"),
+        experiment_id=ann.get("mlops.io/experiment-id"),
+    )
+
+
+def follow_rayjob_logs(
+    name: str,
+    *,
+    namespace: str = "default",
+    follow: bool = False,
+    kubectl: Sequence[str] = ("kubectl",),
+    run: Runner = subprocess.run,
+) -> int:
+    """Stream the driver log to this terminal; returns kubectl's exit code.
+
+    KubeRay submits the entrypoint through a Kubernetes Job named like the RayJob, whose pod
+    runs ``ray job submit`` and tails the driver output, so ``kubectl logs job/NAME`` is the
+    run's stdout/stderr (``mlops run`` summary and warnings included).
+    """
+    cmd = [*kubectl, "logs", "-n", namespace, f"job/{name}"]
+    if follow:
+        cmd.append("--follow")
+    return run(cmd).returncode
