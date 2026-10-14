@@ -22,6 +22,9 @@ class InMemoryArtifactStore:
     def list(self, run_id: str) -> list[str]:
         return sorted(self._run(run_id))
 
+    def delete(self, run_id: str, name: str) -> None:
+        self._runs.get(run_id, {}).pop(validate_name(name), None)
+
     def runs(self) -> list[str]:
         return sorted(r for r, files in self._runs.items() if files)
 

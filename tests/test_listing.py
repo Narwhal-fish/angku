@@ -97,7 +97,7 @@ def test_failed_run_is_listed(spec, store):
 def test_killed_run_with_checkpoint_is_interrupted_and_resumable(spec, store):
     from mlops.application.bundle import CHECKPOINT
 
-    run_id = _run(store, spec, checkpoint_every=1)
+    run_id = _run(store, spec, checkpoint_every=1, keep_checkpoint=True)  # as if it never finished
     store._runs[run_id].pop(MANIFEST)
     store._runs[run_id].pop(MODEL)
     (s,) = list_runs(store)
@@ -107,7 +107,7 @@ def test_killed_run_with_checkpoint_is_interrupted_and_resumable(spec, store):
 
 
 def test_failed_run_with_checkpoint_is_resumable(spec, store):
-    run_id = _run(store, spec, checkpoint_every=1)
+    run_id = _run(store, spec, checkpoint_every=1, keep_checkpoint=True)  # as if it never finished
     store.put(run_id, MANIFEST, store.get(run_id, MANIFEST).replace(b'"FINISHED"', b'"FAILED"'))
     assert list_runs(store)[0].resumable
 

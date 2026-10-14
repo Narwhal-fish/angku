@@ -368,6 +368,27 @@ def test_ray_checkpointing_records_how_to_resume(tmp_path):
     assert launch.storage_path == str(tmp_path / "ray")
 
 
+def _ray_run_dir(storage, run_id):
+    return Path(storage) / f"mlops-{run_id[:12]}-a1"
+
+
+def test_finished_ray_run_drops_its_ray_storage(tmp_path):
+    # The final weights are in model.pt; Ray's copies (checkpoints + final) are dead weight.
+    store = InMemoryArtifactStore()
+    result = RayLauncher(storage_path=tmp_path / "ray").launch(
+        _spec(workers=1, **{"training.epochs": 3}), data=_data(), tracker=InMemoryTracker(), artifacts=store,
+        checkpoint_every=1)
+    assert not _ray_run_dir(tmp_path / "ray", result.run_id).exists()
+    assert load_bundle(store, result.run_id).manifest.status == "FINISHED"
+
+
+def test_ray_keeps_only_the_latest_checkpoint(tmp_path):
+    result = RayLauncher(storage_path=tmp_path / "ray").launch(
+        _spec(workers=1, **{"training.epochs": 3}), data=_data(), tracker=InMemoryTracker(),
+        artifacts=InMemoryArtifactStore(), checkpoint_every=1, keep_checkpoint=True)
+    assert len([p for p in _ray_run_dir(tmp_path / "ray", result.run_id).glob("checkpoint_*") if p.is_dir()]) == 1
+
+
 def test_ray_resume_without_a_checkpoint_is_refused_before_starting(tmp_path):
     tracker = InMemoryTracker()
     with pytest.raises(RunnerError, match="no Ray checkpoint"):

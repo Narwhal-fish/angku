@@ -37,7 +37,7 @@ import ray
 import ray.train
 import ray.train.torch
 import torch
-from ray.train import Checkpoint, RunConfig, ScalingConfig
+from ray.train import Checkpoint, CheckpointConfig, RunConfig, ScalingConfig
 from ray.train.torch import TorchTrainer
 from ray.util.queue import Queue
 
@@ -247,6 +247,7 @@ class RayLauncher:
         probe: EnvironmentProbe | None = None,
         checkpoint_every: int | None = None,
         resume: bool = False,
+        keep_checkpoint: bool = False,
     ) -> RunResult:
         experiment_id = compute_experiment_id(spec)
         run_id = compute_run_id(experiment_id, spec.resources, attempt)
@@ -259,7 +260,7 @@ class RayLauncher:
         if resume:
             assert artifacts is not None
             _refuse_if_finished(artifacts, run_id)
-            if "://" not in storage and not any((Path(storage) / name).glob("checkpoint_*")):
+            if "://" not in storage and not any(p.is_dir() for p in (Path(storage) / name).glob("checkpoint_*")):
                 raise RunnerError(f"no Ray checkpoint for run {run_id} under {Path(storage) / name}: nothing to resume")
             if checkpoint_every is None:
                 try:
@@ -309,7 +310,9 @@ class RayLauncher:
                 resources_per_worker={"CPU": res.cpu, **({"GPU": res.gpu} if use_gpu else {})},
             ),
             # Same name + storage on resume: that is how Ray hands back the latest checkpoint.
-            run_config=RunConfig(name=name, storage_path=storage),
+            # Resuming only ever needs the latest one; Ray's default keeps them all.
+            run_config=RunConfig(name=name, storage_path=storage,
+                                 checkpoint_config=CheckpointConfig(num_to_keep=1)),
         )
 
         history: list[dict[str, float]] = []
@@ -362,6 +365,10 @@ class RayLauncher:
         tracker.end_run("FINISHED")
         if artifacts is not None:
             save_bundle(artifacts, spec=spec, manifest=_manifest("FINISHED"), model_state=state)
+        if not keep_checkpoint:
+            # Ray's copies (latest checkpoint + final weights) are dead weight once model.pt is
+            # written: nothing left to resume. Through Ray's filesystem, so s3:// storage works too.
+            result.filesystem.delete_dir(result.path)
         return RunResult(
             experiment_id=experiment_id, run_id=run_id, device=dev, history=history,
             environment=environment, data_snapshot=data_snapshot, resumes=resumes,

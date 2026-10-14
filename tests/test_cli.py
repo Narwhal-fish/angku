@@ -424,6 +424,18 @@ def test_run_checkpoint_every_writes_checkpoint(tmp_path, capsys):
     assert main(["run", str(yml), "--tracker", "inmemory", "--artifacts", str(art),
                  "--checkpoint-every", "1", "--json"]) == 0
     run_id = json.loads(capsys.readouterr().out)["run_id"]
+    # written while training (see the resume tests), dropped once the run FINISHED
+    assert not (art / run_id / CHECKPOINT).exists()
+
+
+def test_run_keep_checkpoint(tmp_path, capsys):
+    from mlops.application.bundle import CHECKPOINT
+
+    art = tmp_path / "artifacts"
+    yml = _write_yaml(tmp_path / "e.yaml", **{"training.epochs": 2})
+    assert main(["run", str(yml), "--tracker", "inmemory", "--artifacts", str(art),
+                 "--checkpoint-every", "1", "--keep-checkpoint", "--json"]) == 0
+    run_id = json.loads(capsys.readouterr().out)["run_id"]
     assert (art / run_id / CHECKPOINT).is_file()
 
 
@@ -511,7 +523,7 @@ def test_resume_unknown_run_exits_2(tmp_path, capsys):
 def test_resume_finished_run_exits_2(finished_run, capsys):
     art, run_id = finished_run
     assert main(["resume", run_id, "--artifacts", str(art), "--tracker", "inmemory"]) == 2
-    assert "no checkpoint" in capsys.readouterr().err
+    assert "already FINISHED" in capsys.readouterr().err
 
 
 # --- diff ---

@@ -91,7 +91,8 @@ def _interrupt(spec, store, *, fail_at=3, every=2, tracker=None, **kw):
 def test_checkpoint_written_every_n_epochs(spec):
     store = InMemoryArtifactStore()
     spec = spec.model_copy(update={"training": spec.training.model_copy(update={"epochs": 3})})
-    result = run_experiment(spec, data=_data(), tracker=InMemoryTracker(), artifacts=store, checkpoint_every=2)
+    result = run_experiment(spec, data=_data(), tracker=InMemoryTracker(), artifacts=store, checkpoint_every=2,
+                            keep_checkpoint=True)
     ckpt = load_checkpoint(store, result.run_id)
     assert ckpt.epoch == 2
     assert ckpt.history == result.history[:2]
@@ -167,7 +168,8 @@ def test_resume_twice_records_both_points(spec):
 def test_resume_keeps_checkpointing_at_the_stored_interval(spec):
     store = InMemoryArtifactStore()
     _interrupt(spec, store, fail_at=3, every=2)
-    result = run_experiment(spec, data=_data(), tracker=InMemoryTracker(), artifacts=store, resume=True)
+    result = run_experiment(spec, data=_data(), tracker=InMemoryTracker(), artifacts=store, resume=True,
+                            keep_checkpoint=True)
     assert load_checkpoint(store, result.run_id).epoch == 4
 
 
@@ -218,9 +220,12 @@ def test_resume_without_checkpoint_is_refused(spec):
         run_experiment(spec, data=_data(), tracker=InMemoryTracker(), artifacts=store, resume=True)
 
 
-def test_resume_of_a_finished_run_is_refused(spec):
+@pytest.mark.parametrize("keep", [False, True])
+def test_resume_of_a_finished_run_is_refused(spec, keep):
+    # Whether or not the checkpoint survived, the reason to give is "already FINISHED".
     store = InMemoryArtifactStore()
-    run_experiment(spec, data=_data(), tracker=InMemoryTracker(), artifacts=store, checkpoint_every=1)
+    run_experiment(spec, data=_data(), tracker=InMemoryTracker(), artifacts=store, checkpoint_every=1,
+                   keep_checkpoint=keep)
     tracker = InMemoryTracker()
     with pytest.raises(RunnerError, match="already FINISHED"):
         run_experiment(spec, data=_data(), tracker=tracker, artifacts=store, resume=True)
@@ -238,3 +243,35 @@ def test_checkpoint_of_another_run_is_refused(spec):
     store.put(other_id, CHECKPOINT, store.get(run_id, CHECKPOINT))
     with pytest.raises(RunnerError, match="belongs to run"):
         run_experiment(other, data=_data(), tracker=InMemoryTracker(), artifacts=store, resume=True)
+
+
+# --- retention: the checkpoint is for resuming; a FINISHED run has nothing left to resume ---
+
+
+def test_finished_run_drops_its_checkpoint(spec):
+    store = InMemoryArtifactStore()
+    result = run_experiment(spec, data=_data(), tracker=InMemoryTracker(), artifacts=store, checkpoint_every=1)
+    assert CHECKPOINT not in store.list(result.run_id)
+    assert load_bundle(store, result.run_id).manifest.status == "FINISHED"
+
+
+def test_keep_checkpoint_keeps_it(spec):
+    store = InMemoryArtifactStore()
+    result = run_experiment(spec, data=_data(), tracker=InMemoryTracker(), artifacts=store, checkpoint_every=1,
+                            keep_checkpoint=True)
+    assert load_checkpoint(store, result.run_id).epoch == spec.training.epochs
+
+
+def test_resumed_run_drops_its_checkpoint_once_finished(spec):
+    store = KilledStore()
+    _interrupt(spec, store)
+    run_id = next(iter(store._runs))
+    run_experiment(spec, data=_data(), tracker=InMemoryTracker(), artifacts=store, resume=True)
+    assert CHECKPOINT not in store.list(run_id)
+
+
+def test_failed_run_keeps_its_checkpoint(spec):
+    store = InMemoryArtifactStore()
+    _interrupt(spec, store)
+    run_id = next(iter(store._runs))
+    assert CHECKPOINT in store.list(run_id)

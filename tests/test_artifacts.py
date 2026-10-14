@@ -225,3 +225,14 @@ def test_local_runs_ignores_stray_files_and_missing_root(tmp_path):
     store.put("r1", "a.txt", b"x")
     (tmp_path / "notes.txt").write_text("not a run")
     assert store.runs() == ["r1"]
+
+
+def test_delete_removes_one_artifact_and_is_idempotent(store):
+    store.put("r1", "a.bin", b"1")
+    store.put("r1", "b/c.bin", b"2")
+    store.delete("r1", "a.bin")
+    assert store.list("r1") == ["b/c.bin"]
+    store.delete("r1", "a.bin")  # already gone: nothing to do
+    store.delete("never-written", "a.bin")
+    with pytest.raises(ArtifactError):
+        store.delete("r1", "../escape")

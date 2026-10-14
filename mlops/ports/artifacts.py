@@ -38,6 +38,10 @@ class ArtifactStore(Protocol):
         """Sorted artifact names for ``run_id``. Raise ``ArtifactError`` for an unknown run."""
         ...
 
+    def delete(self, run_id: str, name: str) -> None:
+        """Remove ``name`` for ``run_id``; a missing artifact or run is not an error."""
+        ...
+
     def runs(self) -> list[str]:
         """Sorted ids of every run holding at least one artifact (empty store -> [])."""
         ...

@@ -30,6 +30,7 @@ class Launcher(Protocol):
         probe: EnvironmentProbe | None = None,
         checkpoint_every: int | None = None,
         resume: bool = False,
+        keep_checkpoint: bool = False,
     ) -> RunResult: ...
 
 
@@ -38,9 +39,9 @@ class LocalLauncher:
 
     def launch(
         self, spec, *, data, tracker, artifacts=None, attempt=1, device=None, probe=None,
-        checkpoint_every=None, resume=False,
+        checkpoint_every=None, resume=False, keep_checkpoint=False,
     ) -> RunResult:
         return run_experiment(
             spec, data=data, tracker=tracker, artifacts=artifacts, attempt=attempt, device=device, probe=probe,
-            checkpoint_every=checkpoint_every, resume=resume,
+            checkpoint_every=checkpoint_every, resume=resume, keep_checkpoint=keep_checkpoint,
         )

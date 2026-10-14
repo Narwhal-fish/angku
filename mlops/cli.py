@@ -5,9 +5,11 @@ concrete adapters (tracker, data provider, artifact store) and hands them to
     mlops id     experiment.yaml
     mlops run    experiment.yaml [--artifacts DIR] [--data-root DIR] [--tracker mlflow|inmemory]
                                  [--mlflow-uri URI] [--launcher local|ray] [--ray-address ADDR]
-                                 [--device cpu] [--attempt N] [--checkpoint-every N] [--strict-env] [--json]
+                                 [--device cpu] [--attempt N] [--checkpoint-every N] [--keep-checkpoint]
+                                 [--strict-env] [--json]
     mlops resume RUN_ID --artifacts DIR [--data-root DIR] [--tracker mlflow|inmemory] [--mlflow-uri URI]
-                                 [--device cpu] [--ray-address ADDR] [--checkpoint-every N] [--json]
+                                 [--device cpu] [--ray-address ADDR] [--checkpoint-every N] [--keep-checkpoint]
+                                 [--json]
     mlops rayjob experiment.yaml [--namespace NS] [--artifacts-pvc PVC] [--data-pvc PVC] [--attempt N]
                                  [--checkpoint-every N --ray-storage-pvc PVC] [--resume]
                                  [--submit [--kubectl "kubectl --context X"]]
@@ -59,7 +61,7 @@ from mlops.adapters.local_artifacts import LocalArtifactStore
 from mlops.adapters.local_environment import LocalEnvironmentProbe
 from mlops.adapters.synthetic_data import SyntheticBlobs
 from mlops.application import RunnerError
-from mlops.application.bundle import LAUNCH, SPEC, load_bundle, load_checkpoint, load_launch
+from mlops.application.bundle import LAUNCH, MANIFEST, SPEC, load_bundle, load_checkpoint, load_launch
 from mlops.application.launch import Launcher, LocalLauncher
 from mlops.application.runner import verify_data
 from mlops.application.diff import ABSENT, Change, RunDiff, diff_runs
@@ -67,7 +69,7 @@ from mlops.application.listing import ExperimentGroup, group_by_experiment, list
 from mlops.application.report import render_report, write_report
 from mlops.application.reproduce import ReproduceError, ReproduceReport, reproduce_run
 from mlops.config import ConfigError, load_experiment_yaml
-from mlops.domain import ExperimentSpec, UnpinnedInputError, compute_experiment_id, compute_run_id
+from mlops.domain import ExperimentSpec, RunManifest, UnpinnedInputError, compute_experiment_id, compute_run_id
 from mlops.domain.environment import EnvCheck, record_environment
 from mlops.ports.artifacts import ArtifactError
 from mlops.ports.data import DataError, DataProvider
@@ -191,7 +193,8 @@ def cmd_run(args: argparse.Namespace) -> int:
             raise CliError("--strict-env: run does not verifiably match the pins:\n  " + "\n  ".join(problems))
     store = LocalArtifactStore(args.artifacts) if args.artifacts else None
     return _launch_and_report(spec, args, launcher, store, attempt=args.attempt, probe=probe, data=data,
-                              tracker=tracker, checkpoint_every=args.checkpoint_every)
+                              tracker=tracker, checkpoint_every=args.checkpoint_every,
+                              keep_checkpoint=args.keep_checkpoint)
 
 
 def _check_checkpoint_args(args: argparse.Namespace) -> None:
@@ -267,6 +270,12 @@ def cmd_resume(args: argparse.Namespace) -> int:
     except ArtifactError as e:
         raise CliError(str(e)) from e
     launcher: Launcher
+    try:
+        finished = RunManifest.model_validate_json(store.get(args.run_id, MANIFEST)).status == "FINISHED"
+    except ArtifactError:
+        finished = False
+    if finished:  # checked first: a finished run has usually dropped its checkpoint
+        raise CliError(f"run {args.run_id} already FINISHED; nothing to resume")
     if LAUNCH in store.list(args.run_id):
         # A Ray run: its checkpoints live in Ray storage; resume through Ray with the same storage.
         launch = load_launch(store, args.run_id)
@@ -292,7 +301,8 @@ def cmd_resume(args: argparse.Namespace) -> int:
     data = _data_provider(spec, args.data_root)
     tracker = _tracker(spec, args.tracker, args.mlflow_uri)
     return _launch_and_report(spec, args, launcher, store, attempt=attempt, probe=_probe(), data=data,
-                              tracker=tracker, checkpoint_every=args.checkpoint_every, resume=True)
+                              tracker=tracker, checkpoint_every=args.checkpoint_every, resume=True,
+                              keep_checkpoint=args.keep_checkpoint)
 
 
 def cmd_rayjob(args: argparse.Namespace) -> int:
@@ -556,6 +566,12 @@ def _add_data_root(p: argparse.ArgumentParser) -> None:
                    help="where dataset files live on this machine, e.g. DIR/Task09_Spleen (default: $MLOPS_DATA_ROOT)")
 
 
+def _add_keep_checkpoint(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--keep-checkpoint", action="store_true",
+                   help="keep checkpoint.pt (and Ray's checkpoint storage) after the run FINISHED; "
+                        "by default they are deleted, model.pt holds the final weights")
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="mlops", description=__doc__.split("\n\n")[0])
     sub = p.add_subparsers(dest="command", required=True)
@@ -579,6 +595,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--checkpoint-every", type=int, metavar="N",
                      help="store the training state as checkpoint.pt every N epochs (needs --artifacts); "
                           "makes the run resumable with `mlops resume`")
+    _add_keep_checkpoint(run)
     run.add_argument("--strict-env", action="store_true",
                      help="refuse to run unless the code and image verifiably match code.commit / image_digest")
     run.add_argument("--experiments", default="experiments", help="package to discover components from")
@@ -596,6 +613,7 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Ray cluster for a run launched on Ray (storage path comes from its launch.json)")
     rs.add_argument("--checkpoint-every", type=int, metavar="N",
                     help="checkpoint interval from here on (default: the one the run was started with)")
+    _add_keep_checkpoint(rs)
     rs.add_argument("--experiments", default="experiments", help="package to discover components from")
     rs.add_argument("--json", action="store_true", help="machine-readable summary on stdout")
     rs.set_defaults(func=cmd_resume)

@@ -38,6 +38,9 @@ class LocalArtifactStore:
             raise ArtifactError(f"unknown run {run_id}")
         return sorted(p.relative_to(run_dir).as_posix() for p in run_dir.rglob("*") if p.is_file())
 
+    def delete(self, run_id: str, name: str) -> None:
+        self._path(run_id, name).unlink(missing_ok=True)
+
     def runs(self) -> list[str]:
         if not self.root.is_dir():
             return []

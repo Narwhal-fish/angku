@@ -32,6 +32,7 @@ from torch import Tensor, nn
 from torch.utils.data import DataLoader, DistributedSampler, Sampler
 
 from mlops.application.bundle import (
+    CHECKPOINT,
     MANIFEST,
     Checkpoint,
     TrainState,
@@ -432,6 +433,7 @@ def run_experiment(
     probe: EnvironmentProbe | None = None,
     checkpoint_every: int | None = None,
     resume: bool = False,
+    keep_checkpoint: bool = False,
 ) -> RunResult:
     """Train ``spec`` once, in this process. Raises ``UnpinnedInputError`` if the spec is not fully pinned.
 
@@ -442,7 +444,9 @@ def run_experiment(
     With ``checkpoint_every=N`` (needs ``artifacts``) the training state is stored after
     every N-th epoch, together with ``spec.json``. ``resume=True`` continues this run_id from
     that checkpoint (a FAILED or killed run; not a FINISHED one): same tracker run, and the
-    manifest's ``resumes`` records the epoch and this segment's environment.
+    manifest's ``resumes`` records the epoch and this segment's environment. Once the run is
+    FINISHED its ``checkpoint.pt`` is deleted (nothing left to resume; ``reproduce`` replays from
+    scratch) unless ``keep_checkpoint``; a FAILED run keeps it.
     Requires ``resources.workers == 1``; use a distributed launcher otherwise.
     """
     experiment_id = compute_experiment_id(spec)
@@ -521,6 +525,8 @@ def run_experiment(
     tracker.end_run("FINISHED")
     if artifacts is not None:
         save_bundle(artifacts, spec=spec, manifest=_manifest("FINISHED"), model_state=model.state_dict())
+        if not keep_checkpoint:  # after the FINISHED manifest landed: a crash in between only leaves it
+            artifacts.delete(run_id, CHECKPOINT)
 
     return RunResult(
         experiment_id=experiment_id, run_id=run_id, device=str(dev), history=history,
@@ -529,6 +535,13 @@ def run_experiment(
 
 
 def _resume_point(store: ArtifactStore, run_id: str, experiment_id: str) -> Checkpoint:
+    # FINISHED first: a finished run has usually dropped its checkpoint, and that is the reason.
+    try:
+        status = RunManifest.model_validate_json(store.get(run_id, MANIFEST)).status
+    except ArtifactError:  # killed before any manifest was written
+        status = None
+    if status == "FINISHED":
+        raise RunnerError(f"run {run_id} already FINISHED; nothing to resume")
     try:
         ckpt = load_checkpoint(store, run_id)
     except ArtifactError:
@@ -538,10 +551,4 @@ def _resume_point(store: ArtifactStore, run_id: str, experiment_id: str) -> Chec
         ) from None
     if (ckpt.run_id, ckpt.experiment_id) != (run_id, experiment_id):
         raise RunnerError(f"checkpoint stored under run {run_id} belongs to run {ckpt.run_id}")
-    try:
-        status = RunManifest.model_validate_json(store.get(run_id, MANIFEST)).status
-    except ArtifactError:  # killed before any manifest was written
-        status = None
-    if status == "FINISHED":
-        raise RunnerError(f"run {run_id} already FINISHED; nothing to resume")
     return ckpt
