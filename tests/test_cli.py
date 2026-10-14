@@ -341,3 +341,54 @@ def test_report_unknown_run_id_exits_2(tmp_path, capsys):
     assert main(["report", "deadbeef", "--artifacts", str(tmp_path)]) == 2
     err = capsys.readouterr().err
     assert "deadbeef" in err and "Traceback" not in err
+
+
+# --- environment verification ---
+#
+# `mlops run` records the actual environment in manifest.json and warns on stderr when it
+# does not match the pins; `--strict-env` refuses to start unless every check is ok.
+
+
+@pytest.fixture
+def probe(monkeypatch):
+    """Swap the CLI's probe for a FixedProbe; returns a setter."""
+    import mlops.cli as cli
+    from tests.test_environment import FixedProbe
+
+    def use(**kw):
+        monkeypatch.setattr(cli, "_probe", lambda: FixedProbe(**kw))
+    use()
+    return use
+
+
+def test_run_records_environment_in_manifest(tmp_path, capsys):
+    art = tmp_path / "artifacts"
+    assert main(["run", str(SMOKE), "--tracker", "inmemory", "--artifacts", str(art), "--json"]) == 0
+    run_id = json.loads(capsys.readouterr().out)["run_id"]
+    m = json.loads((art / run_id / MANIFEST).read_text())
+    assert m["environment"]["actual"]["packages"]["torch"]
+    assert set(m["environment"]["checks"]) == {"code.commit", "environment.image_digest"}
+
+
+def test_run_warns_when_environment_is_not_verified(tmp_path, capsys, probe):
+    probe(commit_ok=False)
+    assert main(["run", str(SMOKE), "--tracker", "inmemory"]) == 0
+    err = capsys.readouterr().err
+    assert "code.commit" in err and "mismatch" in err and "mlops/x.py" in err
+
+
+def test_strict_env_refuses_an_unverified_environment(tmp_path, capsys, probe):
+    probe(commit_ok=False)
+    art = tmp_path / "artifacts"
+    rc = main(["run", str(SMOKE), "--tracker", "inmemory", "--artifacts", str(art), "--strict-env"])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "--strict-env" in err and "code.commit" in err and "Traceback" not in err
+    assert not art.exists() or not any(art.iterdir())
+
+
+def test_strict_env_runs_when_everything_verifies(tmp_path, capsys, probe):
+    spec = load_experiment_yaml(SMOKE)
+    probe(digest=spec.environment.image_digest)
+    assert main(["run", str(SMOKE), "--tracker", "inmemory", "--strict-env"]) == 0
+    assert "code.commit" not in capsys.readouterr().err

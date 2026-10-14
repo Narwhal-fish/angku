@@ -31,11 +31,13 @@ from ray.train.torch import TorchTrainer
 
 from mlops.application.bundle import save_bundle
 from mlops.application.runner import RunnerError, RunResult, Worker, train_worker
+from mlops.domain.environment import EnvironmentRecord, record_environment
 from mlops.domain.experiment import ExperimentSpec
 from mlops.domain.identity import compute_experiment_id, compute_run_id
 from mlops.domain.manifest import RunManifest
 from mlops.ports.artifacts import ArtifactStore
 from mlops.ports.data import DataProvider
+from mlops.ports.environment import EnvironmentProbe
 from mlops.ports.tracking import RunStatus, Tracker
 from mlops.registry import discover
 
@@ -68,12 +70,17 @@ def _train_loop(config: dict[str, Any]) -> dict[str, Any] | None:
     )
 
     checkpoint = None
+    environment = None
     if worker.is_leader:
+        # Captured on the training rank, not the driver: its GPU, threads and image are what count.
+        probe = config["probe"]
+        if probe is not None:
+            environment = record_environment(spec, probe.capture(spec)).model_dump_json()
         d = tempfile.mkdtemp(prefix="mlops-ckpt-")
         torch.save(model.state_dict(), os.path.join(d, _STATE_FILE))
         checkpoint = Checkpoint.from_directory(d)
     ray.train.report({"epoch": len(history), "done": 1.0}, checkpoint=checkpoint)
-    return {"history": history, "device": str(device)} if worker.is_leader else None
+    return {"history": history, "device": str(device), "environment": environment} if worker.is_leader else None
 
 
 class RayLauncher:
@@ -98,6 +105,7 @@ class RayLauncher:
         artifacts: ArtifactStore | None = None,
         attempt: int = 1,
         device: str | None = None,
+        probe: EnvironmentProbe | None = None,
     ) -> RunResult:
         experiment_id = compute_experiment_id(spec)
         run_id = compute_run_id(experiment_id, spec.resources, attempt)
@@ -119,6 +127,7 @@ class RayLauncher:
             train_loop_config={
                 "spec": spec.model_dump_json(),
                 "data": data,
+                "probe": probe,
                 "experiments": self.experiments,
                 "sys_path": [os.getcwd(), *sys.path],
             },
@@ -135,11 +144,12 @@ class RayLauncher:
 
         history: list[dict[str, float]] = []
         dev = "cuda" if use_gpu else "cpu"
+        environment: EnvironmentRecord | None = None
 
         def _manifest(status: RunStatus) -> RunManifest:
             return RunManifest(
                 experiment_id=experiment_id, run_id=run_id, attempt=attempt,
-                status=status, device=dev, history=history,
+                status=status, device=dev, history=history, environment=environment,
             )
 
         tracker.start_run(run_id=run_id, experiment_id=experiment_id, spec=spec)
@@ -150,6 +160,8 @@ class RayLauncher:
                 raise RunnerError("Ray run finished without rank 0 returning a history/checkpoint")
             history.extend(leader["history"])
             dev = leader["device"]
+            if leader["environment"] is not None:
+                environment = EnvironmentRecord.model_validate_json(leader["environment"])
             with result.checkpoint.as_directory() as d:
                 state = torch.load(Path(d) / _STATE_FILE, map_location="cpu", weights_only=True)
         except BaseException:
@@ -163,5 +175,7 @@ class RayLauncher:
         tracker.end_run("FINISHED")
         if artifacts is not None:
             save_bundle(artifacts, spec=spec, manifest=_manifest("FINISHED"), model_state=state)
-        return RunResult(experiment_id=experiment_id, run_id=run_id, device=dev, history=history)
+        return RunResult(
+            experiment_id=experiment_id, run_id=run_id, device=dev, history=history, environment=environment
+        )
 

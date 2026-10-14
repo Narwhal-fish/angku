@@ -62,6 +62,7 @@ def _header(b: Bundle) -> str:
     ]
     if s.meta.tags:
         rows.append(("tags", ", ".join(s.meta.tags)))
+    rows.append(("environment", _env_verdict(b)))
     return "\n".join(lines) + "\n" + _table(("field", "value"), rows)
 
 
@@ -151,19 +152,51 @@ def _model(b: Bundle) -> str:
     return out + _table(("field", "value"), rows)
 
 
+def _env_verdict(b: Bundle) -> str:
+    record = b.manifest.environment
+    if record is None:
+        return "not recorded"
+    if record.verified:
+        return "verified"
+    bad = [f"{name} {c.status}" for name, c in record.checks.items() if c.status != "ok"]
+    return "not verified (" + ", ".join(bad) + ")"
+
+
 def _environment(b: Bundle) -> str:
-    s = b.spec
-    rows = [
-        ("code.commit", f"`{s.code.commit}`"),
-        ("image", f"`{s.environment.image}`"),
-        ("image_digest", f"`{s.environment.image_digest}`"),
-        ("device (actual)", f"`{b.manifest.device}`"),
-    ]
-    note = (
-        "Commit and image digest are **declared** by the spec and not verified against what "
-        "actually ran; library versions and GPU model are not recorded yet."
+    s, record = b.spec, b.manifest.environment
+    out = "## Environment\n\n"
+    if record is None:
+        rows = [
+            ("code.commit", f"`{s.code.commit}`"),
+            ("image", f"`{s.environment.image}`"),
+            ("image_digest", f"`{s.environment.image_digest}`"),
+            ("device (actual)", f"`{b.manifest.device}`"),
+        ]
+        note = (
+            "Not recorded for this run: commit and image digest are only **declared** by the spec "
+            "and not verified against what actually ran."
+        )
+        return out + note + "\n\n" + _table(("field", "value"), rows)
+
+    verdict = (
+        "The code and image this run ran on match the spec's pins."
+        if record.verified
+        else "**Not verified**: the run cannot be shown to have run exactly what the spec pins."
     )
-    return "## Environment\n\n" + note + "\n\n" + _table(("field", "value"), rows)
+    checks = _table(("pin", "status", "detail"), [(n, c.status, c.detail) for n, c in record.checks.items()])
+    a = record.actual
+    actual = [
+        ("python", a.python),
+        ("platform", a.platform),
+        ("device", f"`{b.manifest.device}`"),
+        ("gpus", ", ".join(a.gpus) or "none"),
+        ("cuda / cudnn", f"{a.cuda or '—'} / {a.cudnn or '—'}"),
+        ("torch threads", str(a.torch_threads)),
+        ("git HEAD", f"`{a.code.head}`" if a.code.head else "—"),
+        ("image_digest", f"`{a.image_digest}`" if a.image_digest else "—"),
+        *((name, version) for name, version in sorted(a.packages.items())),
+    ]
+    return out + verdict + "\n\n" + checks + "\n\nActually ran on:\n\n" + _table(("field", "value"), actual)
 
 
 def _reproduce(b: Bundle) -> str:

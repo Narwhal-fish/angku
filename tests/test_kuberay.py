@@ -165,3 +165,12 @@ def test_submit_uses_custom_kubectl_and_context(spec):
     submit_rayjob(render_rayjob(spec), run=kubectl, kubectl=["kubectl", "--context", "gke-prod"])
     ((cmd, _),) = kubectl.calls
     assert cmd[:3] == ["kubectl", "--context", "gke-prod"]
+
+
+def test_pods_know_which_image_they_run_in(spec):
+    # Kubernetes pulls by digest, so the runtime enforces it; the env var lets the run record it.
+    _, rayjob = render_rayjob(spec)
+    head, _, worker = _containers(rayjob)
+    for c in (head, worker):
+        env = {e["name"]: e["value"] for e in c.get("env", [])}
+        assert env["MLOPS_IMAGE_DIGEST"] == spec.environment.image_digest

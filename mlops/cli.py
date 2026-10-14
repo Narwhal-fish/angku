@@ -5,7 +5,7 @@ concrete adapters (tracker, data provider, artifact store) and hands them to
     mlops id     experiment.yaml
     mlops run    experiment.yaml [--artifacts DIR] [--data-root DIR] [--tracker mlflow|inmemory]
                                  [--mlflow-uri URI] [--launcher local|ray] [--ray-address ADDR]
-                                 [--device cpu] [--attempt N] [--json]
+                                 [--device cpu] [--attempt N] [--strict-env] [--json]
     mlops rayjob experiment.yaml [--namespace NS] [--artifacts-pvc PVC] [--attempt N]
                                  [--submit [--kubectl "kubectl --context X"]]
     mlops reproduce RUN_ID --artifacts DIR [--data-root DIR] [--tracker mlflow|inmemory] [--mlflow-uri URI]
@@ -13,6 +13,10 @@ concrete adapters (tracker, data provider, artifact store) and hands them to
     mlops report RUN_ID --artifacts DIR [--out FILE]
 
 Exit codes: 0 ok, 1 training failed / bundle not reproduced, 2 bad input (yaml, pins, wiring).
+
+Environment: every run records what it actually ran on (code vs code.commit, image digest,
+library versions, GPUs) in manifest.json and warns when that does not match the pins;
+``--strict-env`` refuses to start instead.
 
 Datasets: built-in ``synthetic-blobs``, plus whatever ``experiments/`` registers in
 ``mlops.registry.DATASETS``; those read files under ``--data-root`` (default: $MLOPS_DATA_ROOT).
@@ -34,6 +38,7 @@ from mlops.adapters.inmemory_artifacts import InMemoryArtifactStore
 from mlops.adapters.inmemory_tracker import InMemoryTracker
 from mlops.adapters.kuberay import KubeRayError, render_rayjob, submit_rayjob
 from mlops.adapters.local_artifacts import LocalArtifactStore
+from mlops.adapters.local_environment import LocalEnvironmentProbe
 from mlops.adapters.synthetic_data import SyntheticBlobs
 from mlops.application import RunnerError
 from mlops.application.bundle import SPEC, load_bundle
@@ -42,8 +47,10 @@ from mlops.application.report import render_report, write_report
 from mlops.application.reproduce import ReproduceError, ReproduceReport, reproduce_run
 from mlops.config import ConfigError, load_experiment_yaml
 from mlops.domain import ExperimentSpec, UnpinnedInputError, compute_experiment_id, compute_run_id
+from mlops.domain.environment import EnvironmentRecord, record_environment
 from mlops.ports.artifacts import ArtifactError
 from mlops.ports.data import DataError, DataProvider
+from mlops.ports.environment import EnvironmentProbe
 from mlops.ports.tracking import Tracker, TrackerError
 from mlops.registry import DATASETS, RegistryError, discover
 
@@ -107,6 +114,14 @@ def _tracker(spec: ExperimentSpec, choice: str | None, mlflow_uri: str | None) -
     raise CliError(f"unknown tracker {backend!r}; known: inmemory, mlflow")
 
 
+def _probe() -> EnvironmentProbe:
+    return LocalEnvironmentProbe()
+
+
+def _unverified(record: EnvironmentRecord) -> list[str]:
+    return [f"{name}: {c.status}: {c.detail}" for name, c in record.checks.items() if c.status != "ok"]
+
+
 def _launcher(spec: ExperimentSpec, args: argparse.Namespace) -> Launcher:
     if args.launcher == "ray":
         try:
@@ -141,11 +156,18 @@ def cmd_run(args: argparse.Namespace) -> int:
     data = _data_provider(spec, args.data_root)
     tracker = _tracker(spec, args.tracker, args.mlflow_uri)
     launcher = _launcher(spec, args)
+    probe = _probe()
+    if args.strict_env:
+        # Pre-flight on this machine; the record in the manifest is captured where training runs.
+        problems = _unverified(record_environment(spec, probe.capture(spec)))
+        if problems:
+            raise CliError("--strict-env: environment does not match the pins:\n  " + "\n  ".join(problems))
     store = LocalArtifactStore(args.artifacts) if args.artifacts else None
 
     try:
         result = launcher.launch(
-            spec, data=data, tracker=tracker, artifacts=store, attempt=args.attempt, device=args.device
+            spec, data=data, tracker=tracker, artifacts=store, attempt=args.attempt, device=args.device,
+            probe=probe,
         )
     except (TrackerError, DataError, RegistryError, RunnerError) as e:
         raise CliError(str(e)) from e
@@ -160,6 +182,9 @@ def cmd_run(args: argparse.Namespace) -> int:
         return 1
     if store is not None:
         write_report(store, result.run_id)
+    if result.environment is not None:
+        for problem in _unverified(result.environment):
+            print(f"warning: environment not verified: {problem}", file=sys.stderr)
 
     summary: dict[str, Any] = {
         "status": "FINISHED",
@@ -291,6 +316,8 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--ray-storage", metavar="DIR", help="Ray Train storage_path for run state/checkpoints")
     run.add_argument("--device", help="torch device override, e.g. cpu")
     run.add_argument("--attempt", type=int, default=1, help="retry counter; part of RunID")
+    run.add_argument("--strict-env", action="store_true",
+                     help="refuse to run unless the code and image verifiably match code.commit / image_digest")
     run.add_argument("--experiments", default="experiments", help="package to discover components from")
     run.add_argument("--json", action="store_true", help="machine-readable summary on stdout")
     run.set_defaults(func=cmd_run)

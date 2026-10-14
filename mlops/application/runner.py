@@ -26,11 +26,13 @@ from torch import Tensor, nn
 from torch.utils.data import DataLoader, DistributedSampler
 
 from mlops.application.bundle import save_bundle
+from mlops.domain.environment import EnvironmentRecord, record_environment
 from mlops.domain.experiment import ExperimentSpec, Resources, Training
 from mlops.domain.identity import compute_experiment_id, compute_run_id
 from mlops.domain.manifest import RunManifest
 from mlops.ports.artifacts import ArtifactStore
 from mlops.ports.data import DataProvider, Sample
+from mlops.ports.environment import EnvironmentProbe
 from mlops.ports.tracking import RunStatus, Tracker
 from mlops.registry import AUGMENTATIONS, LOSSES, MODELS
 
@@ -55,6 +57,7 @@ class RunResult:
     device: str
     # One entry per epoch, in order: {"train/loss": ..., "val/loss": ...}.
     history: list[dict[str, float]] = field(default_factory=list)
+    environment: EnvironmentRecord | None = None
 
     @property
     def final_metrics(self) -> dict[str, float]:
@@ -269,17 +272,20 @@ def run_experiment(
     artifacts: ArtifactStore | None = None,
     attempt: int = 1,
     device: str | None = None,
+    probe: EnvironmentProbe | None = None,
 ) -> RunResult:
     """Train ``spec`` once, in this process. Raises ``UnpinnedInputError`` if the spec is not fully pinned.
 
     With ``artifacts``, the run bundle (spec, manifest, final checkpoint) is
     written on FINISHED; on FAILED the spec and manifest are still written so
-    the failure is reproducible. Requires ``resources.workers == 1``; use a
-    distributed launcher otherwise.
+    the failure is reproducible. With ``probe``, the actual environment and its
+    checks against the spec's pins go into the manifest (recorded, not enforced).
+    Requires ``resources.workers == 1``; use a distributed launcher otherwise.
     """
     experiment_id = compute_experiment_id(spec)
     run_id = compute_run_id(experiment_id, spec.resources, attempt)
     dev = resolve_device(spec.resources, device)
+    environment = record_environment(spec, probe.capture(spec)) if probe is not None else None
 
     history: list[dict[str, float]] = []
     started = False
@@ -292,6 +298,7 @@ def run_experiment(
             status=status,
             device=str(dev),
             history=history,
+            environment=environment,
         )
 
     def on_start() -> None:
@@ -315,4 +322,6 @@ def run_experiment(
     if artifacts is not None:
         save_bundle(artifacts, spec=spec, manifest=_manifest("FINISHED"), model_state=model.state_dict())
 
-    return RunResult(experiment_id=experiment_id, run_id=run_id, device=str(dev), history=history)
+    return RunResult(
+        experiment_id=experiment_id, run_id=run_id, device=str(dev), history=history, environment=environment
+    )

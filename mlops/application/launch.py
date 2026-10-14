@@ -13,6 +13,7 @@ from mlops.application.runner import RunResult, run_experiment
 from mlops.domain.experiment import ExperimentSpec
 from mlops.ports.artifacts import ArtifactStore
 from mlops.ports.data import DataProvider
+from mlops.ports.environment import EnvironmentProbe
 from mlops.ports.tracking import Tracker
 
 
@@ -26,13 +27,14 @@ class Launcher(Protocol):
         artifacts: ArtifactStore | None = None,
         attempt: int = 1,
         device: str | None = None,
+        probe: EnvironmentProbe | None = None,
     ) -> RunResult: ...
 
 
 class LocalLauncher:
     """world_size 1, this process."""
 
-    def launch(self, spec, *, data, tracker, artifacts=None, attempt=1, device=None) -> RunResult:
+    def launch(self, spec, *, data, tracker, artifacts=None, attempt=1, device=None, probe=None) -> RunResult:
         return run_experiment(
-            spec, data=data, tracker=tracker, artifacts=artifacts, attempt=attempt, device=device
+            spec, data=data, tracker=tracker, artifacts=artifacts, attempt=attempt, device=device, probe=probe
         )

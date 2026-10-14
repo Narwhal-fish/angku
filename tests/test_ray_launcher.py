@@ -114,3 +114,16 @@ def test_worker_failure_marks_run_failed_and_keeps_failed_bundle(launcher):
     assert run.status == "FAILED"
     bundle = load_bundle(store, run.run_id)
     assert bundle.manifest.status == "FAILED" and bundle.model_state is None
+
+
+def test_environment_is_captured_on_the_training_worker(launcher):
+    import os
+
+    from tests.test_environment import FixedProbe
+
+    store = InMemoryArtifactStore()
+    result = launcher.launch(_spec(workers=1), data=_data(), tracker=InMemoryTracker(), artifacts=store,
+                             probe=FixedProbe())
+    env = load_bundle(store, result.run_id).manifest.environment
+    assert env is not None and env.checks["code.commit"].status == "ok"
+    assert env.actual.platform != f"pid={os.getpid()}"  # the rank-0 worker, not the driver

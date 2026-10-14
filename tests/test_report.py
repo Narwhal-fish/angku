@@ -235,3 +235,32 @@ def _fake_bundle(spec, *, status="FINISHED", history=None) -> Bundle:
 
     state = {"w": torch.zeros(2, 3)} if status == "FINISHED" else None
     return Bundle(spec=spec, manifest=manifest, model_state=state)
+
+
+# --- environment record ---
+
+
+def test_environment_section_shows_checks_and_versions(spec):
+    from mlops.domain.environment import record_environment
+    from tests.test_environment import FixedProbe
+
+    b = _fake_bundle(spec)
+    env = record_environment(spec, FixedProbe(commit_ok=False).capture(spec))
+    b = Bundle(spec=b.spec, manifest=b.manifest.model_copy(update={"environment": env}), model_state=b.model_state)
+    body = _section(render_report(b), "Environment")
+    assert "mismatch" in body and "mlops/x.py" in body
+    assert "unknown" in body  # image digest
+    assert "torch" in body and "2.x" in body
+    assert "3.12.0" in body
+    assert "not verified" in body.lower()
+
+
+def test_header_flags_an_unverified_environment(spec):
+    from mlops.domain.environment import record_environment
+    from tests.test_environment import FixedProbe
+
+    b = _fake_bundle(spec)
+    env = record_environment(spec, FixedProbe(commit_ok=False).capture(spec))
+    b = Bundle(spec=b.spec, manifest=b.manifest.model_copy(update={"environment": env}), model_state=b.model_state)
+    header = render_report(b).split("\n## ", 1)[0]
+    assert "environment" in header and "mismatch" in header

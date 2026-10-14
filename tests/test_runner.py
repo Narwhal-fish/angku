@@ -314,3 +314,50 @@ def test_seed_everything_switches_torch_deterministic_mode():
     assert not torch.are_deterministic_algorithms_enabled()
     seed_everything(0)  # default is deterministic: the reproducibility contract
     assert torch.are_deterministic_algorithms_enabled()
+
+
+# --- environment record ---
+
+
+def test_probe_result_is_recorded_in_the_manifest(spec):
+    from mlops.adapters.inmemory_artifacts import InMemoryArtifactStore
+    from mlops.application.bundle import load_bundle
+    from tests.test_environment import FixedProbe
+
+    store = InMemoryArtifactStore()
+    r = run_experiment(spec, data=_data(), tracker=InMemoryTracker(), artifacts=store, probe=FixedProbe())
+    env = load_bundle(store, r.run_id).manifest.environment
+    assert env.actual.packages == {"torch": "2.x"}
+    assert env.checks["code.commit"].status == "ok"
+    assert env.checks["environment.image_digest"].status == "unknown"
+    assert not env.verified
+    assert r.environment == env
+
+
+def test_failed_run_still_records_the_environment(spec):
+    from mlops.adapters.inmemory_artifacts import InMemoryArtifactStore
+    from mlops.application.bundle import load_bundle
+    from tests.test_environment import FixedProbe
+
+    bad = spec.model_copy(update={"model": spec.model.model_copy(update={"params": {**spec.model.params, "in_channels": 3}})})
+    store = InMemoryArtifactStore()
+    with pytest.raises(RuntimeError):
+        run_experiment(bad, data=_data(), tracker=InMemoryTracker(), artifacts=store, probe=FixedProbe())
+    run_id = compute_run_id(compute_experiment_id(bad), bad.resources, attempt=1)
+    assert load_bundle(store, run_id).manifest.environment is not None
+
+
+def test_without_probe_no_environment_is_recorded(spec):
+    from mlops.adapters.inmemory_artifacts import InMemoryArtifactStore
+    from mlops.application.bundle import load_bundle
+
+    store = InMemoryArtifactStore()
+    r = run_experiment(spec, data=_data(), tracker=InMemoryTracker(), artifacts=store)
+    assert load_bundle(store, r.run_id).manifest.environment is None
+
+
+def test_manifest_written_before_environment_records_still_loads():
+    from mlops.domain import RunManifest
+
+    old = '{"experiment_id": "e", "run_id": "r", "attempt": 1, "status": "FINISHED", "device": "cpu", "history": []}'
+    assert RunManifest.model_validate_json(old).environment is None

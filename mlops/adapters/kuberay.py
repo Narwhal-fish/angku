@@ -87,6 +87,8 @@ def render_rayjob(
             "image": image,
             "resources": {"limits": dict(limits), "requests": dict(limits)},
             "volumeMounts": list(mounts),
+            # Kubernetes pulls by digest, so the runtime enforces it; this lets the run record it.
+            "env": [{"name": "MLOPS_IMAGE_DIGEST", "value": spec.environment.image_digest}],
         }
 
     worker_limits = {"cpu": str(res.cpu), "memory": res.memory}
