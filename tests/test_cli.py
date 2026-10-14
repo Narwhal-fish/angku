@@ -11,6 +11,7 @@ import pytest
 import yaml
 
 from mlops.application.bundle import MANIFEST, MODEL, SPEC
+from mlops.application.report import REPORT
 from mlops.cli import main
 from mlops.domain import compute_experiment_id
 from mlops.config import load_experiment_yaml
@@ -68,7 +69,7 @@ def test_run_writes_bundle_and_prints_summary(tmp_path, capsys):
     assert "FINISHED" in out
 
     (run_dir,) = art.iterdir()
-    assert sorted(p.name for p in run_dir.iterdir()) == sorted([MANIFEST, MODEL, SPEC])
+    assert sorted(p.name for p in run_dir.iterdir()) == sorted([MANIFEST, MODEL, REPORT, SPEC])
     assert run_dir.name in out
 
 
@@ -133,7 +134,8 @@ def test_training_failure_exits_1_and_keeps_failed_bundle(tmp_path, capsys):
     assert rc == 1
     assert "FAILED" in capsys.readouterr().err
     (run_dir,) = art.iterdir()
-    assert sorted(p.name for p in run_dir.iterdir()) == sorted([MANIFEST, SPEC])
+    assert sorted(p.name for p in run_dir.iterdir()) == sorted([MANIFEST, REPORT, SPEC])
+    assert "FAILED" in (run_dir / REPORT).read_text().splitlines()[0]
 
 
 def test_console_entry_point():
@@ -298,3 +300,44 @@ def test_reproduce_failed_run_exits_2(tmp_path, capsys):
     rc = main(["reproduce", run_dir.name, "--artifacts", str(art), "--tracker", "inmemory"])
     assert rc == 2
     assert "FAILED" in capsys.readouterr().err
+
+
+# --- report ---
+#
+# `mlops run --artifacts` writes report.md next to the bundle; `mlops report RUN_ID`
+# re-renders it from the bundle (stdout, or --out FILE).
+
+
+def test_run_writes_a_report_rendered_from_the_bundle(finished_run):
+    art, run_id = finished_run
+    md = (art / run_id / REPORT).read_text()
+    assert md.startswith("# tiny-cnn-smoke")
+    assert run_id in md and "FINISHED" in md
+
+
+def test_report_prints_markdown_from_the_bundle(finished_run, capsys):
+    art, run_id = finished_run
+    assert main(["report", run_id, "--artifacts", str(art)]) == 0
+    out = capsys.readouterr().out
+    assert out == (art / run_id / REPORT).read_text()
+
+
+def test_report_out_writes_file(finished_run, tmp_path, capsys):
+    art, run_id = finished_run
+    out_file = tmp_path / "r.md"
+    assert main(["report", run_id, "--artifacts", str(art), "--out", str(out_file)]) == 0
+    assert out_file.read_text() == (art / run_id / REPORT).read_text()
+
+
+def test_report_regenerates_when_report_md_is_missing(finished_run, capsys):
+    art, run_id = finished_run
+    expected = (art / run_id / REPORT).read_text()
+    (art / run_id / REPORT).unlink()
+    assert main(["report", run_id, "--artifacts", str(art)]) == 0
+    assert capsys.readouterr().out == expected
+
+
+def test_report_unknown_run_id_exits_2(tmp_path, capsys):
+    assert main(["report", "deadbeef", "--artifacts", str(tmp_path)]) == 2
+    err = capsys.readouterr().err
+    assert "deadbeef" in err and "Traceback" not in err

@@ -10,6 +10,7 @@ concrete adapters (tracker, data provider, artifact store) and hands them to
                                  [--submit [--kubectl "kubectl --context X"]]
     mlops reproduce RUN_ID --artifacts DIR [--tracker mlflow|inmemory] [--mlflow-uri URI]
                                  [--device cpu] [--atol X] [--json]
+    mlops report RUN_ID --artifacts DIR [--out FILE]
 
 Exit codes: 0 ok, 1 training failed / bundle not reproduced, 2 bad input (yaml, pins, wiring).
 """
@@ -32,11 +33,12 @@ from mlops.adapters.kuberay import KubeRayError, render_rayjob, submit_rayjob
 from mlops.adapters.local_artifacts import LocalArtifactStore
 from mlops.adapters.synthetic_data import SyntheticBlobs
 from mlops.application import RunnerError
-from mlops.application.bundle import SPEC
+from mlops.application.bundle import SPEC, load_bundle
 from mlops.application.launch import Launcher, LocalLauncher
+from mlops.application.report import render_report, write_report
 from mlops.application.reproduce import ReproduceError, ReproduceReport, reproduce_run
 from mlops.config import ConfigError, load_experiment_yaml
-from mlops.domain import ExperimentSpec, UnpinnedInputError, compute_experiment_id
+from mlops.domain import ExperimentSpec, UnpinnedInputError, compute_experiment_id, compute_run_id
 from mlops.ports.artifacts import ArtifactError
 from mlops.ports.data import DataError, DataProvider
 from mlops.ports.tracking import Tracker, TrackerError
@@ -140,8 +142,16 @@ def cmd_run(args: argparse.Namespace) -> int:
     except (TrackerError, DataError, RegistryError, RunnerError) as e:
         raise CliError(str(e)) from e
     except Exception as e:  # training itself blew up; the FAILED bundle (if any) is already written
+        if store is not None:
+            run_id = compute_run_id(compute_experiment_id(spec), spec.resources, args.attempt)
+            try:
+                write_report(store, run_id)
+            except ArtifactError:  # failed before the run started: no bundle to report on
+                pass
         print(f"run FAILED: {type(e).__name__}: {e}", file=sys.stderr)
         return 1
+    if store is not None:
+        write_report(store, result.run_id)
 
     summary: dict[str, Any] = {
         "status": "FINISHED",
@@ -233,6 +243,18 @@ def _print_report(spec: ExperimentSpec, r: ReproduceReport) -> None:
         print(f"    {m.check}: {m.detail}")
 
 
+def cmd_report(args: argparse.Namespace) -> int:
+    try:
+        md = render_report(load_bundle(LocalArtifactStore(args.artifacts), args.run_id))
+    except ArtifactError as e:
+        raise CliError(str(e)) from e
+    if args.out:
+        Path(args.out).write_text(md)
+    else:
+        sys.stdout.write(md)
+    return 0
+
+
 # -- entry point ---------------------------------------------------------------
 
 
@@ -281,6 +303,12 @@ def build_parser() -> argparse.ArgumentParser:
     rp.add_argument("--experiments", default="experiments", help="package to discover components from")
     rp.add_argument("--json", action="store_true", help="machine-readable report on stdout")
     rp.set_defaults(func=cmd_reproduce)
+
+    rr = sub.add_parser("report", help="render the human-readable Markdown report of a run from its bundle")
+    rr.add_argument("run_id", help="run to report on; its bundle must be under --artifacts")
+    rr.add_argument("--artifacts", metavar="DIR", required=True, help="artifact root holding DIR/<run_id>/")
+    rr.add_argument("--out", metavar="FILE", help="write the report to FILE instead of stdout")
+    rr.set_defaults(func=cmd_report)
     return p
 
 

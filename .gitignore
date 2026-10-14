@@ -5,3 +5,9 @@ __pycache__/
 .pytest_cache/
 dist/
 build/
+
+# Generated run report (derived from the run bundle; regenerate with `mlops report`)
+report.md
+
+# Run outputs (`mlops run --artifacts artifacts`): bundles are evidence, not source
+artifacts/
