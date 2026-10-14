@@ -249,3 +249,43 @@ def test_baseline_yaml_preprocessing_is_valid_for_the_provider(provider):
     spec = load_experiment_yaml(ROOT / "experiments/configs/swinunetr_baseline.yaml")
     assert spec.dataset.name == NAME
     SpleenPreprocessing.model_validate(spec.preprocessing)
+
+
+# --- full-volume validation (with spec.inference doing the tiling) ---
+
+
+def test_val_mode_typo_is_rejected(provider):
+    with pytest.raises(DataError, match="val"):
+        provider.load(_ds(), {**PRE, "val": "full_volumes"})
+
+
+def test_full_volume_val_serves_whole_preprocessed_cases(provider):
+    splits = provider.load(_ds(), {**PRE, "val": "full_volume"})
+    case = splits.val.cases[0]
+    x, y = splits.val[0]
+    assert type(x) is torch.Tensor and type(y) is torch.Tensor
+    assert x.shape == case.image.shape and y.shape == case.label.shape
+    assert x.shape[1:] != (8, 8, 8)  # bigger than one roi: not a crop
+    assert torch.equal(y, case.label) and y.sum() > 0
+
+
+def test_full_volume_val_with_sliding_window_runs_end_to_end(provider, tmp_path):
+    from mlops.config import load_experiment_dict
+
+    spec = _spleen_spec(tmp_path)
+    spec = load_experiment_dict({
+        **spec.model_dump(),
+        "preprocessing": {**PRE, "val": "full_volume"},
+        "inference": {"name": "sliding_window", "params": {"roi_size": [8, 8, 8], "overlap": 0.25}},
+        "metrics": [{"name": "dice", "params": {"include_background": False, "class_names": ["bg", "spleen"]}}],
+    })
+    a = run_experiment(spec, data=provider, tracker=InMemoryTracker())
+    b = run_experiment(spec, data=provider, tracker=InMemoryTracker())
+    assert a.history == b.history
+    assert 0.0 <= a.final_metrics["val/dice/spleen"] <= 1.0
+
+
+def test_baseline_yaml_validates_on_full_volumes():
+    spec = load_experiment_yaml(ROOT / "experiments/configs/swinunetr_baseline.yaml")
+    assert spec.preprocessing["val"] == "full_volume"
+    assert spec.inference.params["roi_size"] == spec.preprocessing["roi_size"]

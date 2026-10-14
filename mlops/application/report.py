@@ -128,6 +128,11 @@ def _experiment(b: Bundle) -> str:
             [(f"metric {i}", f"{m.name} {_json(m.params)}") for i, m in enumerate(s.metrics, start=1)]
             or [("metrics", "val/loss only")]
         ),
+        (
+            ("inference", f"{s.inference.name} {_json(s.inference.params)}")
+            if s.inference is not None
+            else ("inference", "model(x) on each val batch")
+        ),
         ("optimizer", t.optimizer),
         ("learning_rate", _num(t.learning_rate)),
         ("epochs", str(t.epochs)),

@@ -48,12 +48,14 @@ from mlops.ports.artifacts import ArtifactError, ArtifactStore
 from mlops.ports.data import DataError, DataProvider, Sample
 from mlops.ports.environment import EnvironmentProbe
 from mlops.ports.tracking import RunStatus, Tracker
-from mlops.registry import AUGMENTATIONS, LOSSES, METRICS, MODELS
+from mlops.registry import AUGMENTATIONS, INFERERS, LOSSES, METRICS, MODELS
 
 # An augmentation is a callable applied to one on-device batch: (inputs, targets) -> (inputs, targets).
 Augment = Callable[[Tensor, Tensor], tuple[Tensor, Tensor]]
 # A validation metric: (logits, targets) -> {key: per-sample values (N,)}, NaN = undefined there.
 Metric = Callable[[Tensor, Tensor], dict[str, Tensor]]
+# How the model is applied to one validation batch: (model, inputs) -> logits.
+Inferer = Callable[[nn.Module, Tensor], Tensor]
 
 _OPTIMIZERS: dict[str, type[torch.optim.Optimizer]] = {
     "adam": torch.optim.Adam,
@@ -222,13 +224,14 @@ def _eval_epoch(
     loader: DataLoader[Sample],
     device: torch.device,
     metrics: Sequence[Metric] = (),
+    infer: Inferer | None = None,
 ) -> dict[str, float]:
     model.eval()
     total, count = 0.0, 0
     sums: dict[str, list[float]] = {}
     for x, y in loader:
         x, y = x.to(device), y.to(device)
-        logits = model(x)
+        logits = infer(model, x) if infer is not None else model(x)
         total += float(loss_fn(logits, y)) * x.shape[0]
         count += x.shape[0]
         batch: dict[str, Tensor] = {}
@@ -330,6 +333,9 @@ def train_worker(
         loss_fn = loss_fn.to(device)
     augments: list[Augment] = [AUGMENTATIONS.build(a.name, a.params) for a in spec.augmentation]
     metrics: list[Metric] = [METRICS.build(m.name, m.params) for m in spec.metrics]
+    infer: Inferer | None = (
+        INFERERS.build(spec.inference.name, spec.inference.params) if spec.inference is not None else None
+    )
     optimizer = build_optimizer(spec.training, model.parameters())
     if resume_from is not None:
         optimizer.load_state_dict(resume_from.optimizer_state)
@@ -343,8 +349,10 @@ def train_worker(
         )
     bs, seed = spec.per_worker_batch_size(), spec.training.seed
     train_loader = _loader(splits.train, batch_size=bs, shuffle=True, seed=seed, worker=worker)
+    # With an inferer, validation goes one volume at a time: full volumes differ in shape.
+    val_bs = 1 if infer is not None else bs
     val_loader = (
-        _loader(splits.val, batch_size=bs, shuffle=False, seed=seed, worker=worker)
+        _loader(splits.val, batch_size=val_bs, shuffle=False, seed=seed, worker=worker)
         if splits.val is not None
         else None
     )
@@ -366,7 +374,7 @@ def train_worker(
         _set_epoch(train_loader, epoch)
         row = {"train/loss": _train_epoch(trained, loss_fn, optimizer, train_loader, augments, device)}
         if val_loader is not None:
-            row.update(_eval_epoch(trained, loss_fn, val_loader, device, metrics))
+            row.update(_eval_epoch(trained, loss_fn, val_loader, device, metrics, infer))
         history.append(row)
         if on_epoch is not None:
             on_epoch(epoch, row)

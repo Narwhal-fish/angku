@@ -15,8 +15,11 @@ They use MONAI transforms (deterministic, so MONAI's own RNG never matters).
 Random train crops follow ``RandCropByPosNegLabeld`` semantics but draw from torch's
 global RNG, like the augmentations, so the run seed decides them: with probability
 ``pos / (pos + neg)`` the crop is centred on a random label voxel, otherwise on a
-uniformly random voxel. Val items are one fixed crop centred on the label centroid
-(stand-in until full-volume sliding-window evaluation, roadmap item 8).
+uniformly random voxel. Val items depend on ``val``: ``centred_crop`` = one fixed roi crop
+centred on the label centroid (cheap, but not the number anyone reports);
+``full_volume`` = the whole preprocessed case, the real per-case Dice. Full volumes differ in
+shape and exceed the roi, so they need ``spec.inference`` (e.g. ``sliding_window``), which
+also makes the runner validate one volume at a time.
 
 Split: cases sorted by file name, the last ``num_val`` are validation.
 
@@ -31,7 +34,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import torch
 from pydantic import Field, ValidationError
@@ -60,6 +63,7 @@ class SpleenPreprocessing(Params):
     num_val: int = Field(default=9, ge=1)
     pos: float = Field(default=1.0, ge=0)
     neg: float = Field(default=1.0, ge=0)
+    val: Literal["centred_crop", "full_volume"] = "centred_crop"
 
 
 @dataclass(frozen=True)
@@ -107,7 +111,7 @@ class MsdSpleen:
         n_train = len(cases) - p.num_val
         return DataSplits(
             train=RandomCrops(cases[:n_train], p.roi_size, pos=p.pos, neg=p.neg),
-            val=CentredCrops(cases[n_train:], p.roi_size),
+            val=CentredCrops(cases[n_train:], p.roi_size) if p.val == "centred_crop" else FullVolumes(cases[n_train:]),
         )
 
     def _list_cases(self) -> list[tuple[str, Path, Path]]:
@@ -196,3 +200,16 @@ class CentredCrops(TorchDataset[Sample]):
         else:
             centre = torch.tensor(case.label.shape) // 2
         return _crop(case, centre, self.roi)
+
+
+class FullVolumes(TorchDataset[Sample]):
+    """Each whole preprocessed case; shapes differ, so the runner must use an inferer."""
+
+    def __init__(self, cases: list[Case]) -> None:
+        self.cases = cases
+
+    def __len__(self) -> int:
+        return len(self.cases)
+
+    def __getitem__(self, i: int) -> Sample:
+        return self.cases[i].image, self.cases[i].label

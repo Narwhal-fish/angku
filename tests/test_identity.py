@@ -219,3 +219,23 @@ def test_metrics_entry_typo_rejected(raw):
     raw["metrics"] = [{"name": "dice", "parms": {}}]
     with pytest.raises(ConfigError):
         load_experiment_dict(raw)
+
+
+def test_inference_absent_keeps_old_ids(raw):
+    raw.pop("inference", None)
+    spec = load_experiment_dict(raw)
+    assert spec.inference is None
+    assert "inference" not in spec.fingerprint()
+
+
+def test_inference_is_part_of_experiment_id(raw):
+    raw["inference"] = {"name": "sliding_window", "params": {"roi_size": [96, 96, 96], "overlap": 0.25}}
+    a = load_experiment_dict(raw)
+    raw["inference"]["params"]["overlap"] = 0.5
+    assert compute_experiment_id(a) != compute_experiment_id(load_experiment_dict(raw))
+
+
+def test_inference_section_typo_rejected(raw):
+    raw["inference"] = {"name": "sliding_window", "parms": {}}
+    with pytest.raises(ConfigError):
+        load_experiment_dict(raw)

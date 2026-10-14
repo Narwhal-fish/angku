@@ -122,6 +122,11 @@ class Metric(_Strict):
     params: dict[str, Any] = Field(default_factory=dict)
 
 
+class Inference(_Strict):
+    name: str
+    params: dict[str, Any] = Field(default_factory=dict)
+
+
 class Resources(_Strict):
     """Hardware allocation. Part of RunID only, never ExperimentID.
 
@@ -157,6 +162,9 @@ class ExperimentSpec(_Strict):
     # Validation metrics beyond val/loss. They never touch the weights, but they shape the
     # history a bundle promises to reproduce, so they are in the fingerprint (when present).
     metrics: list[Metric] = Field(default_factory=list)
+    # How the model is applied to a validation volume (e.g. sliding window). None = model(x).
+    # Shapes val/loss and the metrics, so it is in the fingerprint (when present).
+    inference: Inference | None = None
     resources: Resources
     tracking: Tracking = Field(default_factory=Tracking)
 
@@ -190,8 +198,8 @@ class ExperimentSpec(_Strict):
         """The exact subset of the spec that defines the scientific experiment.
 
         Includes: code commit, image digest, dataset name+snapshot, preprocessing,
-        model, training (incl. seed), augmentation, loss, metrics (only when non-empty,
-        so ids from before the field existed are unchanged).
+        model, training (incl. seed), augmentation, loss, metrics and inference (each only
+        when set, so ids from before those fields existed are unchanged).
         Excludes: meta, image tag, dataset version label, resources, tracking.
         """
         fp: dict[str, Any] = {
@@ -206,4 +214,6 @@ class ExperimentSpec(_Strict):
         }
         if self.metrics:
             fp["metrics"] = [m.model_dump() for m in self.metrics]
+        if self.inference is not None:
+            fp["inference"] = self.inference.model_dump()
         return fp

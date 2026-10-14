@@ -346,3 +346,16 @@ def test_resumed_run_says_where_it_was_resumed(spec):
 
 def test_uninterrupted_run_has_no_resumed_row(bundle):
     assert "| resumed |" not in render_report(bundle)
+
+
+def test_inference_is_listed_in_the_experiment_section(spec):
+    from mlops.domain.experiment import Inference
+
+    spec = spec.model_copy(update={"inference": Inference(name="sliding_window", params={"roi_size": [96, 96, 96]})})
+    body = _section(render_report(_fake_bundle(spec)), "Experiment")
+    assert "| inference | sliding_window" in body and "roi_size" in body
+
+
+def test_no_inference_says_plain_forward(spec):
+    body = _section(render_report(_fake_bundle(spec)), "Experiment")
+    assert "| inference | model(x) on each val batch |" in body

@@ -1,4 +1,4 @@
-"""Registries for researcher-defined components (models, losses, augmentations, metrics, datasets).
+"""Registries for researcher-defined components (models, losses, augmentations, metrics, inferers, datasets).
 
 The platform never imports a concrete model. Researchers register factories
 under a name; ``experiment.yaml`` refers to that name and supplies ``params``.
@@ -112,6 +112,9 @@ AUGMENTATIONS: Registry[Any] = Registry("augmentation")
 # one value per sample, NaN where the metric is undefined for that sample. The runner averages
 # the defined values over the whole val split (all ranks) and logs them as ``val/<key>``.
 METRICS: Registry[Any] = Registry("metric")
+# How the model is applied to one validation batch. A factory returns ``(model, x) -> logits``
+# (e.g. sliding-window over a full volume). Without ``spec.inference`` the runner calls model(x).
+INFERERS: Registry[Any] = Registry("inferer")
 # Data providers, keyed by ``dataset.name``. Unlike the other kinds, ``params`` here is the
 # provider's *operational* config (e.g. ``root``: where the files live on this machine), which
 # never enters any id; the yaml's ``preprocessing`` section goes to ``DataProvider.load``.

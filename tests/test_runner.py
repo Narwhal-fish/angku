@@ -180,11 +180,13 @@ def test_swinunetr_baseline_stack_trains_on_synthetic_data():
             "preprocessing": {},
             "model": {"name": "swinunetr", "params": {**base.model.params, "feature_size": 12}},
             "training": {**base.training.model_dump(), "epochs": 1, "batch_size": 2},
+            "inference": {**base.inference.model_dump(), "params": {**base.inference.params, "roi_size": [64, 64, 64]}},
             "resources": {**base.resources.model_dump(), "gpu": 0},
         }
     )
     assert [a.name for a in spec.augmentation] == ["rand_flip", "rand_rotate90"]
     assert spec.loss.name == "dice_ce"
+    assert spec.inference.name == "sliding_window" and spec.metrics[0].name == "dice"
 
     data = SyntheticBlobs(n_train=2, n_val=1, shape=(64, 64, 64), in_channels=1, num_classes=2)
     store = InMemoryArtifactStore()
@@ -291,6 +293,7 @@ def test_swinunetr_stack_is_reproducible_with_same_seed():
                 {"name": "rand_flip", "params": {"prob": 0.5, "spatial_axis": [0, 1, 2]}},
                 {"name": "rand_rotate90", "params": {"prob": 0.5, "max_k": 3}},
             ],
+            "inference": {**base.inference.model_dump(), "params": {**base.inference.params, "roi_size": [64, 64, 64]}},
             "resources": {**base.resources.model_dump(), "gpu": 0},
         }
     )
@@ -457,3 +460,63 @@ def test_unknown_metric_name_is_refused(spec):
     spec = _with_metrics(spec, [{"name": "dcie", "params": {}}])
     with pytest.raises(RegistryError, match="unknown metric 'dcie'"):
         run_experiment(spec, data=_data(), tracker=InMemoryTracker())
+
+
+# --- inference hook (spec.inference, INFERERS registry) ---
+
+
+def _register_counting_inferer(calls: list[tuple[int, ...]]) -> None:
+    from mlops.registry import INFERERS
+
+    class _NoParams(Params):
+        pass
+
+    if "_test_counting" not in INFERERS:
+
+        @INFERERS.register("_test_counting", params=_NoParams)
+        def _counting(p: _NoParams):
+            def infer(model, x):
+                _INFER_CALLS.append(tuple(x.shape))
+                return model(x)
+
+            return infer
+
+    globals()["_INFER_CALLS"] = calls
+    calls.clear()
+
+
+def test_inferer_replaces_the_plain_forward_on_validation(spec):
+    calls: list[tuple[int, ...]] = []
+    _register_counting_inferer(calls)
+    plain = run_experiment(spec, data=_data(), tracker=InMemoryTracker())
+    calls.clear()
+    spec = load_experiment_dict({**spec.model_dump(), "inference": {"name": "_test_counting", "params": {}}})
+    result = run_experiment(spec, data=_data(), tracker=InMemoryTracker())
+    # validation only, one volume at a time (volumes may differ in shape)
+    assert calls == [(1, 1, 8, 8, 8), (1, 1, 8, 8, 8)]
+    assert result.history[0]["train/loss"] == plain.history[0]["train/loss"]
+    assert result.history[0]["val/loss"] == pytest.approx(plain.history[0]["val/loss"], abs=1e-6)
+
+
+def test_unknown_inferer_is_refused_before_the_run_starts(spec):
+    from mlops.registry import RegistryError
+
+    spec = load_experiment_dict({**spec.model_dump(), "inference": {"name": "sliding_windw", "params": {}}})
+    tracker = InMemoryTracker()
+    with pytest.raises(RegistryError, match="unknown inferer 'sliding_windw'"):
+        run_experiment(spec, data=_data(), tracker=tracker)
+    assert tracker.runs == []
+
+
+def test_sliding_window_validation_end_to_end(spec):
+    pytest.importorskip("monai", reason="medical extra not installed")
+    spec = load_experiment_dict({
+        **spec.model_dump(),
+        "training": {**spec.training.model_dump(), "epochs": 2},
+        "inference": {"name": "sliding_window", "params": {"roi_size": [4, 4, 4], "overlap": 0.5, "mode": "gaussian"}},
+        "metrics": [{"name": "dice", "params": {"include_background": False}}],
+    })
+    a = run_experiment(spec, data=_data(), tracker=InMemoryTracker())
+    b = run_experiment(spec, data=_data(), tracker=InMemoryTracker())
+    assert a.history == b.history
+    assert {"val/loss", "val/dice/1"} <= set(a.final_metrics)
