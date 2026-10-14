@@ -13,9 +13,11 @@ concrete adapters (tracker, data provider, artifact store) and hands them to
     mlops reproduce RUN_ID --artifacts DIR [--data-root DIR] [--tracker mlflow|inmemory] [--mlflow-uri URI]
                                  [--device cpu] [--atol X] [--json]
     mlops report RUN_ID --artifacts DIR [--out FILE]
+    mlops diff   RUN_A RUN_B --artifacts DIR [--artifacts-b DIR] [--json]
     mlops snapshot experiment.yaml [--data-root DIR]
 
-Exit codes: 0 ok, 1 training failed / bundle not reproduced, 2 bad input (yaml, pins, wiring).
+Exit codes: 0 ok, 1 training failed / bundle not reproduced / diff: different experiments,
+2 bad input (yaml, pins, wiring).
 
 Environment: every run records what it actually ran on (code vs code.commit, image digest,
 library versions, GPUs) and the data provider's content hash vs dataset.snapshot in
@@ -30,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import shlex
 import subprocess
@@ -48,6 +51,7 @@ from mlops.application import RunnerError
 from mlops.application.bundle import SPEC, load_bundle, load_checkpoint
 from mlops.application.launch import Launcher, LocalLauncher
 from mlops.application.runner import verify_data
+from mlops.application.diff import ABSENT, Change, RunDiff, diff_runs
 from mlops.application.report import render_report, write_report
 from mlops.application.reproduce import ReproduceError, ReproduceReport, reproduce_run
 from mlops.config import ConfigError, load_experiment_yaml
@@ -341,6 +345,59 @@ def cmd_report(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_diff(args: argparse.Namespace) -> int:
+    store_a = LocalArtifactStore(args.artifacts)
+    store_b = LocalArtifactStore(args.artifacts_b) if args.artifacts_b else store_a
+    try:
+        d = diff_runs(store_a, args.run_a, store_b, args.run_b)
+    except ArtifactError as e:
+        raise CliError(str(e)) from e
+    if args.json:
+        print(json.dumps(d.to_dict(), indent=2))
+    else:
+        _print_diff(d)
+    return 0 if d.same_experiment else 1
+
+
+def _fmt(v: Any) -> str:
+    if v is ABSENT:
+        return "(absent)"
+    if isinstance(v, float):
+        return f"{v:.6g}"
+    return v if isinstance(v, str) else json.dumps(v, sort_keys=True)
+
+
+def _print_changes(title: str, changes: list[Change]) -> None:
+    if not changes:
+        return
+    print(title)
+    width = max(len(c.path) for c in changes)
+    for c in changes:
+        print(f"  {c.path:<{width}}  {_fmt(c.a)} -> {_fmt(c.b)}")
+
+
+def _print_diff(d: RunDiff) -> None:
+    def side(run: str, attempt: int | None, status: str) -> str:
+        return f"{run[:12]} (attempt {attempt if attempt is not None else '?'}, {status})"
+
+    print(f"a: {side(d.run_a, d.attempt_a, d.status_a)}")
+    print(f"b: {side(d.run_b, d.attempt_b, d.status_b)}")
+    if d.same_experiment:
+        print(f"same experiment: fingerprints identical ({d.experiment_id_a[:12]})")
+    else:
+        print(f"different experiments: {len(d.experiment)} fingerprint change(s)")
+    _print_changes("experiment (in the ExperimentID):", d.experiment)
+    _print_changes("run (RunID only):", d.run)
+    _print_changes("labels (in no id):", d.labels)
+    _print_changes("environment (what each run ran on):", d.environment)
+    if d.metrics:
+        print("final metrics:")
+        width = max(len(m.name) for m in d.metrics)
+        for m in d.metrics:
+            delta = f"  ({m.delta:+.4g})" if m.delta is not None and not math.isnan(m.delta) else ""
+            print(f"  {m.name:<{width}}  {_fmt(m.a)} -> {_fmt(m.b)}{delta}")
+
+
 def cmd_snapshot(args: argparse.Namespace) -> int:
     spec = _load(args.experiment)
     _discover(args.experiments)
@@ -434,6 +491,15 @@ def build_parser() -> argparse.ArgumentParser:
     rr.add_argument("--artifacts", metavar="DIR", required=True, help="artifact root holding DIR/<run_id>/")
     rr.add_argument("--out", metavar="FILE", help="write the report to FILE instead of stdout")
     rr.set_defaults(func=cmd_report)
+
+    df = sub.add_parser("diff", help="explain why two runs differ (fingerprint, resources, labels, env, metrics); "
+                                     "exit 0 same experiment, 1 different")
+    df.add_argument("run_a")
+    df.add_argument("run_b")
+    df.add_argument("--artifacts", metavar="DIR", required=True, help="artifact root holding run_a (and run_b)")
+    df.add_argument("--artifacts-b", metavar="DIR", help="artifact root holding run_b, if it is elsewhere")
+    df.add_argument("--json", action="store_true", help="machine-readable diff on stdout")
+    df.set_defaults(func=cmd_diff)
 
     sn = sub.add_parser("snapshot", help="print the content hash of the data a spec would load, to pin as dataset.snapshot")
     sn.add_argument("experiment", help="path to experiment.yaml")

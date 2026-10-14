@@ -467,3 +467,53 @@ def test_resume_finished_run_exits_2(finished_run, capsys):
     art, run_id = finished_run
     assert main(["resume", run_id, "--artifacts", str(art), "--tracker", "inmemory"]) == 2
     assert "no checkpoint" in capsys.readouterr().err
+
+
+# --- diff ---
+#
+# Exit 0 same experiment (fingerprints identical) / 1 different experiments / 2 bad input.
+
+
+def _run_json(capsys, *argv) -> str:
+    assert main(["run", *argv, "--tracker", "inmemory", "--json"]) == 0
+    return json.loads(capsys.readouterr().out)["run_id"]
+
+
+def test_diff_same_experiment_exits_0(tmp_path, capsys):
+    art = tmp_path / "artifacts"
+    a = _run_json(capsys, str(SMOKE), "--artifacts", str(art))
+    b = _run_json(capsys, str(SMOKE), "--artifacts", str(art), "--attempt", "2")
+    assert main(["diff", a, b, "--artifacts", str(art)]) == 0
+    out = capsys.readouterr().out
+    assert "same experiment" in out and "attempt" in out
+
+
+def test_diff_names_the_changed_input_and_exits_1(tmp_path, capsys):
+    art = tmp_path / "artifacts"
+    a = _run_json(capsys, str(SMOKE), "--artifacts", str(art))
+    b = _run_json(capsys, str(_write_yaml(tmp_path / "s.yaml", **{"training.seed": 7})), "--artifacts", str(art))
+    assert main(["diff", a, b, "--artifacts", str(art)]) == 1
+    out = capsys.readouterr().out
+    assert "different experiments" in out
+    assert "training.seed" in out and "0 -> 7" in out
+    assert "val/loss" in out
+
+
+def test_diff_json(tmp_path, capsys):
+    art = tmp_path / "artifacts"
+    a = _run_json(capsys, str(SMOKE), "--artifacts", str(art))
+    b = _run_json(capsys, str(_write_yaml(tmp_path / "s.yaml", **{"training.seed": 7})), "--artifacts", str(art))
+    assert main(["diff", a, b, "--artifacts", str(art), "--json"]) == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["experiment"] == [{"path": "training.seed", "a": 0, "b": 7}]
+
+
+def test_diff_across_two_artifact_roots(tmp_path, capsys):
+    a = _run_json(capsys, str(SMOKE), "--artifacts", str(tmp_path / "one"))
+    b = _run_json(capsys, str(SMOKE), "--artifacts", str(tmp_path / "two"))
+    assert main(["diff", a, b, "--artifacts", str(tmp_path / "one"), "--artifacts-b", str(tmp_path / "two")]) == 0
+
+
+def test_diff_unknown_run_exits_2(tmp_path, capsys):
+    assert main(["diff", "a" * 64, "b" * 64, "--artifacts", str(tmp_path)]) == 2
+    assert "Traceback" not in capsys.readouterr().err
