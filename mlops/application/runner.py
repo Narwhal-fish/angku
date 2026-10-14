@@ -26,12 +26,12 @@ from torch import Tensor, nn
 from torch.utils.data import DataLoader, DistributedSampler
 
 from mlops.application.bundle import save_bundle
-from mlops.domain.environment import EnvironmentRecord, record_environment
+from mlops.domain.environment import EnvCheck, EnvironmentRecord, check_snapshot, record_environment
 from mlops.domain.experiment import ExperimentSpec, Resources, Training
 from mlops.domain.identity import compute_experiment_id, compute_run_id
 from mlops.domain.manifest import RunManifest
 from mlops.ports.artifacts import ArtifactStore
-from mlops.ports.data import DataProvider, Sample
+from mlops.ports.data import DataError, DataProvider, Sample
 from mlops.ports.environment import EnvironmentProbe
 from mlops.ports.tracking import RunStatus, Tracker
 from mlops.registry import AUGMENTATIONS, LOSSES, MODELS
@@ -58,6 +58,7 @@ class RunResult:
     # One entry per epoch, in order: {"train/loss": ..., "val/loss": ...}.
     history: list[dict[str, float]] = field(default_factory=list)
     environment: EnvironmentRecord | None = None
+    data_snapshot: EnvCheck | None = None
 
     @property
     def final_metrics(self) -> dict[str, float]:
@@ -209,18 +210,24 @@ def train_worker(
     wrap_model: Callable[[nn.Module], nn.Module] | None = None,
     on_start: Callable[[], None] | None = None,
     on_epoch: EpochHook | None = None,
+    on_data: Callable[[EnvCheck], None] | None = None,
 ) -> tuple[nn.Module, list[dict[str, float]]]:
     """Run the epoch loop for one rank. Returns the (unwrapped) model and the history.
 
     ``wrap_model`` is where a launcher injects DDP (the returned model is the
-    original so its ``state_dict`` has no ``module.`` prefix). ``on_start`` fires
-    once everything is built and data is loaded, right before the first epoch.
+    original so its ``state_dict`` has no ``module.`` prefix). ``on_data`` gets
+    the data snapshot check first thing (every rank verifies the data it reads);
+    ``on_start`` fires once everything is built and data is loaded, right before
+    the first epoch.
     """
     if spec.resources.workers != worker.world_size:
         raise RunnerError(
             f"spec says resources.workers={spec.resources.workers} but the launcher "
             f"started world_size={worker.world_size}"
         )
+    data_check = verify_data(spec, data)
+    if on_data is not None:
+        on_data(data_check)
 
     # Everything that touches RNG happens after this line. Every rank builds the
     # identical model; DDP would broadcast rank 0's weights anyway.
@@ -261,6 +268,14 @@ def train_worker(
     return model, history
 
 
+def verify_data(spec: ExperimentSpec, data: DataProvider) -> EnvCheck:
+    """Compare the provider's content hash with ``dataset.snapshot``; raise ``DataError`` on mismatch."""
+    check = check_snapshot(spec.dataset.snapshot, data.snapshot(spec.dataset))
+    if check.status == "mismatch":
+        raise DataError(check.detail)
+    return check
+
+
 # -- use case ------------------------------------------------------------------
 
 
@@ -299,7 +314,14 @@ def run_experiment(
             device=str(dev),
             history=history,
             environment=environment,
+            data_snapshot=data_snapshot,
         )
+
+    data_snapshot: EnvCheck | None = None
+
+    def on_data(check: EnvCheck) -> None:
+        nonlocal data_snapshot
+        data_snapshot = check
 
     def on_start() -> None:
         nonlocal started
@@ -311,7 +333,9 @@ def run_experiment(
         history.append(metrics)
 
     try:
-        model, _ = train_worker(spec, data=data, device=dev, on_start=on_start, on_epoch=on_epoch)
+        model, _ = train_worker(
+            spec, data=data, device=dev, on_start=on_start, on_epoch=on_epoch, on_data=on_data
+        )
     except BaseException:
         if started:
             tracker.end_run("FAILED")
@@ -323,5 +347,6 @@ def run_experiment(
         save_bundle(artifacts, spec=spec, manifest=_manifest("FINISHED"), model_state=model.state_dict())
 
     return RunResult(
-        experiment_id=experiment_id, run_id=run_id, device=str(dev), history=history, environment=environment
+        experiment_id=experiment_id, run_id=run_id, device=str(dev), history=history,
+        environment=environment, data_snapshot=data_snapshot,
     )

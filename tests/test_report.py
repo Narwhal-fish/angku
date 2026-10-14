@@ -264,3 +264,29 @@ def test_header_flags_an_unverified_environment(spec):
     b = Bundle(spec=b.spec, manifest=b.manifest.model_copy(update={"environment": env}), model_state=b.model_state)
     header = render_report(b).split("\n## ", 1)[0]
     assert "environment" in header and "mismatch" in header
+
+
+# --- data snapshot ---
+
+
+def _with_data_check(b: Bundle, status: str, detail: str) -> Bundle:
+    from mlops.domain.environment import EnvCheck
+
+    m = b.manifest.model_copy(update={"data_snapshot": EnvCheck(status=status, detail=detail)})
+    return Bundle(spec=b.spec, manifest=m, model_state=b.model_state)
+
+
+def test_header_shows_data_verdict(spec):
+    header = render_report(_with_data_check(_fake_bundle(spec), "ok", "served data hashes to x")).split("\n## ", 1)[0]
+    assert "| data | verified |" in header
+
+
+def test_environment_section_lists_the_data_check(spec):
+    b = _with_data_check(_fake_bundle(spec), "unknown", "dvc:x is not a content hash")
+    body = _section(render_report(b), "Environment")
+    assert "dataset.snapshot" in body and "dvc:x is not a content hash" in body
+
+
+def test_old_bundle_without_data_check_says_not_recorded(spec):
+    header = render_report(_fake_bundle(spec)).split("\n## ", 1)[0]
+    assert "| data | not recorded |" in header

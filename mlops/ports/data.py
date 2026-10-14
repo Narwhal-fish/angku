@@ -32,6 +32,11 @@ class DataSplits:
 
 
 class DataProvider(Protocol):
+    def snapshot(self, dataset: Dataset) -> str | None:
+        """Content id (``sha256:<64hex>``) of what ``load`` would serve, or None if the
+        provider cannot attest to its data. Independent of where the files live."""
+        ...
+
     def load(self, dataset: Dataset, preprocessing: dict[str, Any]) -> DataSplits:
         """Return the splits for ``dataset`` at its pinned snapshot.
 

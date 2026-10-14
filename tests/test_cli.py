@@ -387,8 +387,12 @@ def test_strict_env_refuses_an_unverified_environment(tmp_path, capsys, probe):
     assert not art.exists() or not any(art.iterdir())
 
 
-def test_strict_env_runs_when_everything_verifies(tmp_path, capsys, probe):
+def test_strict_env_runs_when_everything_verifies(tmp_path, capsys, probe, monkeypatch):
+    import mlops.cli as cli
+    from tests.test_data_snapshot import HashedBlobs
+
     spec = load_experiment_yaml(SMOKE)
     probe(digest=spec.environment.image_digest)
+    monkeypatch.setitem(cli._DATA_PROVIDERS, "synthetic-blobs", lambda: HashedBlobs(spec.dataset.snapshot))
     assert main(["run", str(SMOKE), "--tracker", "inmemory", "--strict-env"]) == 0
     assert "code.commit" not in capsys.readouterr().err

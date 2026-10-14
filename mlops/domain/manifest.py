@@ -6,7 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from mlops.domain.environment import EnvironmentRecord
+from mlops.domain.environment import EnvCheck, EnvironmentRecord
 
 
 class RunManifest(BaseModel):
@@ -22,3 +22,5 @@ class RunManifest(BaseModel):
     # What the run actually ran on, verified against the spec's pins. None = not captured
     # (no probe given, or a bundle written before environments were recorded).
     environment: EnvironmentRecord | None = None
+    # The served data vs dataset.snapshot. None only in bundles predating the check.
+    data_snapshot: EnvCheck | None = None

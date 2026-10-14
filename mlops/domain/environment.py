@@ -1,5 +1,8 @@
 """What a run actually ran on, and whether that matches what the spec pins. Pure data + logic.
 
+Covers the environment (code, image: ``verify_environment``) and the data
+(``check_snapshot``: the provider's content hash vs ``dataset.snapshot``).
+
 ``RunEnvironment`` is captured by an ``EnvironmentProbe`` adapter (git, importlib, torch);
 ``verify_environment`` compares it with the spec's pins. Statuses:
 
@@ -10,6 +13,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -17,6 +21,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from mlops.domain.experiment import ExperimentSpec
 
 CheckStatus = Literal["ok", "mismatch", "unknown"]
+
+CONTENT_HASH_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 # Changed files listed by name in a mismatch detail; the rest are counted.
 _MAX_LISTED = 10
@@ -111,3 +117,17 @@ def _check_image(pinned: str | None, actual: str | None) -> EnvCheck:
     if actual == pinned:
         return EnvCheck(status="ok", detail=f"running in {pinned}")
     return EnvCheck(status="mismatch", detail=f"running in {actual}, spec pins {pinned}")
+
+
+def check_snapshot(pinned: str | None, served: str | None) -> EnvCheck:
+    """``pinned`` = ``dataset.snapshot``; ``served`` = the provider's content hash, None if it has none."""
+    if served is None:
+        return EnvCheck(status="unknown", detail="the data provider does not hash what it serves")
+    if pinned is None or not CONTENT_HASH_RE.match(pinned):
+        return EnvCheck(
+            status="unknown",
+            detail=f"dataset.snapshot {pinned!r} is not a content hash; the served data is {served} (pin that to verify)",
+        )
+    if pinned == served:
+        return EnvCheck(status="ok", detail=f"served data hashes to {served}")
+    return EnvCheck(status="mismatch", detail=f"dataset.snapshot pins {pinned} but the served data hashes to {served}")

@@ -30,8 +30,8 @@ from ray.train import Checkpoint, RunConfig, ScalingConfig
 from ray.train.torch import TorchTrainer
 
 from mlops.application.bundle import save_bundle
-from mlops.application.runner import RunnerError, RunResult, Worker, train_worker
-from mlops.domain.environment import EnvironmentRecord, record_environment
+from mlops.application.runner import RunnerError, RunResult, Worker, train_worker, verify_data
+from mlops.domain.environment import EnvCheck, EnvironmentRecord, record_environment
 from mlops.domain.experiment import ExperimentSpec
 from mlops.domain.identity import compute_experiment_id, compute_run_id
 from mlops.domain.manifest import RunManifest
@@ -56,6 +56,8 @@ def _train_loop(config: dict[str, Any]) -> dict[str, Any] | None:
     worker = Worker(rank=ctx.get_world_rank(), world_size=ctx.get_world_size())
     device = ray.train.torch.get_device()
 
+    data_check: list[EnvCheck] = []
+
     def on_epoch(epoch: int, metrics: dict[str, float]) -> None:
         # report() is a barrier: every rank calls it the same number of times.
         ray.train.report({"epoch": epoch, **metrics})
@@ -67,6 +69,7 @@ def _train_loop(config: dict[str, Any]) -> dict[str, Any] | None:
         worker=worker,
         wrap_model=ray.train.torch.prepare_model,
         on_epoch=on_epoch,
+        on_data=data_check.append,
     )
 
     checkpoint = None
@@ -80,7 +83,14 @@ def _train_loop(config: dict[str, Any]) -> dict[str, Any] | None:
         torch.save(model.state_dict(), os.path.join(d, _STATE_FILE))
         checkpoint = Checkpoint.from_directory(d)
     ray.train.report({"epoch": len(history), "done": 1.0}, checkpoint=checkpoint)
-    return {"history": history, "device": str(device), "environment": environment} if worker.is_leader else None
+    if not worker.is_leader:
+        return None
+    return {
+        "history": history,
+        "device": str(device),
+        "environment": environment,
+        "data_snapshot": data_check[0].model_dump_json() if data_check else None,
+    }
 
 
 class RayLauncher:
@@ -145,13 +155,17 @@ class RayLauncher:
         history: list[dict[str, float]] = []
         dev = "cuda" if use_gpu else "cpu"
         environment: EnvironmentRecord | None = None
+        data_snapshot: EnvCheck | None = None
 
         def _manifest(status: RunStatus) -> RunManifest:
             return RunManifest(
                 experiment_id=experiment_id, run_id=run_id, attempt=attempt,
                 status=status, device=dev, history=history, environment=environment,
+                data_snapshot=data_snapshot,
             )
 
+        # Wrong data must not even start a run (as with the local runner); ranks re-check what they read.
+        verify_data(spec, data)
         tracker.start_run(run_id=run_id, experiment_id=experiment_id, spec=spec)
         try:
             result = trainer.fit()
@@ -162,6 +176,8 @@ class RayLauncher:
             dev = leader["device"]
             if leader["environment"] is not None:
                 environment = EnvironmentRecord.model_validate_json(leader["environment"])
+            if leader["data_snapshot"] is not None:
+                data_snapshot = EnvCheck.model_validate_json(leader["data_snapshot"])
             with result.checkpoint.as_directory() as d:
                 state = torch.load(Path(d) / _STATE_FILE, map_location="cpu", weights_only=True)
         except BaseException:
@@ -176,6 +192,7 @@ class RayLauncher:
         if artifacts is not None:
             save_bundle(artifacts, spec=spec, manifest=_manifest("FINISHED"), model_state=state)
         return RunResult(
-            experiment_id=experiment_id, run_id=run_id, device=dev, history=history, environment=environment
+            experiment_id=experiment_id, run_id=run_id, device=dev, history=history,
+            environment=environment, data_snapshot=data_snapshot,
         )
 

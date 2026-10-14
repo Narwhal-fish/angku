@@ -127,3 +127,15 @@ def test_environment_is_captured_on_the_training_worker(launcher):
     env = load_bundle(store, result.run_id).manifest.environment
     assert env is not None and env.checks["code.commit"].status == "ok"
     assert env.actual.platform != f"pid={os.getpid()}"  # the rank-0 worker, not the driver
+    assert load_bundle(store, result.run_id).manifest.data_snapshot.status == "unknown"  # synthetic data
+
+
+def test_wrong_data_never_starts_a_ray_run(launcher):
+    from mlops.ports.data import DataError
+    from tests.test_data_snapshot import A, B, HashedBlobs
+
+    spec = _spec(workers=1, **{"dataset.snapshot": A})
+    tracker = InMemoryTracker()
+    with pytest.raises(DataError, match="dataset.snapshot"):
+        launcher.launch(spec, data=HashedBlobs(B), tracker=tracker)
+    assert tracker.runs == []

@@ -18,6 +18,8 @@ environment:
 dataset:
   name: msd-task09-spleen
   version: v1
+  # Placeholder: not a content hash, so the run records dataset.snapshot "unknown".
+  # Pin the real value with: mlops snapshot <this yaml> --data-root DIR
   snapshot: dvc:8d1f2c3a4b5e6f7081920a1b2c3d4e5f
 
 # Validated by experiments/datasets/msd_spleen.py (SpleenPreprocessing). Every field is

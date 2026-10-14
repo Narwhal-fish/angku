@@ -11,12 +11,14 @@ concrete adapters (tracker, data provider, artifact store) and hands them to
     mlops reproduce RUN_ID --artifacts DIR [--data-root DIR] [--tracker mlflow|inmemory] [--mlflow-uri URI]
                                  [--device cpu] [--atol X] [--json]
     mlops report RUN_ID --artifacts DIR [--out FILE]
+    mlops snapshot experiment.yaml [--data-root DIR]
 
 Exit codes: 0 ok, 1 training failed / bundle not reproduced, 2 bad input (yaml, pins, wiring).
 
 Environment: every run records what it actually ran on (code vs code.commit, image digest,
-library versions, GPUs) in manifest.json and warns when that does not match the pins;
-``--strict-env`` refuses to start instead.
+library versions, GPUs) and the data provider's content hash vs dataset.snapshot in
+manifest.json, and warns when they cannot be verified; ``--strict-env`` refuses to start
+instead. Data that verifiably differs from dataset.snapshot always refuses (exit 2).
 
 Datasets: built-in ``synthetic-blobs``, plus whatever ``experiments/`` registers in
 ``mlops.registry.DATASETS``; those read files under ``--data-root`` (default: $MLOPS_DATA_ROOT).
@@ -43,11 +45,12 @@ from mlops.adapters.synthetic_data import SyntheticBlobs
 from mlops.application import RunnerError
 from mlops.application.bundle import SPEC, load_bundle
 from mlops.application.launch import Launcher, LocalLauncher
+from mlops.application.runner import verify_data
 from mlops.application.report import render_report, write_report
 from mlops.application.reproduce import ReproduceError, ReproduceReport, reproduce_run
 from mlops.config import ConfigError, load_experiment_yaml
 from mlops.domain import ExperimentSpec, UnpinnedInputError, compute_experiment_id, compute_run_id
-from mlops.domain.environment import EnvironmentRecord, record_environment
+from mlops.domain.environment import EnvCheck, record_environment
 from mlops.ports.artifacts import ArtifactError
 from mlops.ports.data import DataError, DataProvider
 from mlops.ports.environment import EnvironmentProbe
@@ -118,8 +121,8 @@ def _probe() -> EnvironmentProbe:
     return LocalEnvironmentProbe()
 
 
-def _unverified(record: EnvironmentRecord) -> list[str]:
-    return [f"{name}: {c.status}: {c.detail}" for name, c in record.checks.items() if c.status != "ok"]
+def _unverified(checks: dict[str, EnvCheck]) -> list[str]:
+    return [f"{name}: {c.status}: {c.detail}" for name, c in checks.items() if c.status != "ok"]
 
 
 def _launcher(spec: ExperimentSpec, args: argparse.Namespace) -> Launcher:
@@ -159,9 +162,14 @@ def cmd_run(args: argparse.Namespace) -> int:
     probe = _probe()
     if args.strict_env:
         # Pre-flight on this machine; the record in the manifest is captured where training runs.
-        problems = _unverified(record_environment(spec, probe.capture(spec)))
+        try:
+            data_check = verify_data(spec, data)
+        except DataError as e:
+            raise CliError(str(e)) from e
+        checks = {**record_environment(spec, probe.capture(spec)).checks, "dataset.snapshot": data_check}
+        problems = _unverified(checks)
         if problems:
-            raise CliError("--strict-env: environment does not match the pins:\n  " + "\n  ".join(problems))
+            raise CliError("--strict-env: run does not verifiably match the pins:\n  " + "\n  ".join(problems))
     store = LocalArtifactStore(args.artifacts) if args.artifacts else None
 
     try:
@@ -182,9 +190,11 @@ def cmd_run(args: argparse.Namespace) -> int:
         return 1
     if store is not None:
         write_report(store, result.run_id)
-    if result.environment is not None:
-        for problem in _unverified(result.environment):
-            print(f"warning: environment not verified: {problem}", file=sys.stderr)
+    checks = dict(result.environment.checks) if result.environment is not None else {}
+    if result.data_snapshot is not None:
+        checks["dataset.snapshot"] = result.data_snapshot
+    for problem in _unverified(checks):
+        print(f"warning: not verified: {problem}", file=sys.stderr)
 
     summary: dict[str, Any] = {
         "status": "FINISHED",
@@ -288,6 +298,20 @@ def cmd_report(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_snapshot(args: argparse.Namespace) -> int:
+    spec = _load(args.experiment)
+    _discover(args.experiments)
+    data = _data_provider(spec, args.data_root)
+    try:
+        served = data.snapshot(spec.dataset)
+    except DataError as e:
+        raise CliError(str(e)) from e
+    if served is None:
+        raise CliError(f"the provider for {spec.dataset.name!r} does not hash its data; nothing to pin")
+    print(served)
+    return 0
+
+
 # -- entry point ---------------------------------------------------------------
 
 
@@ -351,6 +375,12 @@ def build_parser() -> argparse.ArgumentParser:
     rr.add_argument("--artifacts", metavar="DIR", required=True, help="artifact root holding DIR/<run_id>/")
     rr.add_argument("--out", metavar="FILE", help="write the report to FILE instead of stdout")
     rr.set_defaults(func=cmd_report)
+
+    sn = sub.add_parser("snapshot", help="print the content hash of the data a spec would load, to pin as dataset.snapshot")
+    sn.add_argument("experiment", help="path to experiment.yaml")
+    _add_data_root(sn)
+    sn.add_argument("--experiments", default="experiments", help="package to discover components from")
+    sn.set_defaults(func=cmd_snapshot)
     return p
 
 

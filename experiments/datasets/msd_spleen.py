@@ -19,10 +19,15 @@ uniformly random voxel. Val items are one fixed crop centred on the label centro
 (stand-in until full-volume sliding-window evaluation, roadmap item 8).
 
 Split: cases sorted by file name, the last ``num_val`` are validation.
+
+``snapshot`` = sha256 over the sorted (relative path, sha256 of file) of every image and
+label ``load`` reads. Location-independent; files it does not serve (imagesTs, stray files)
+do not count. Pin the value ``mlops snapshot <yaml> --data-root DIR`` prints.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -73,6 +78,17 @@ def build_msd_spleen(p: SpleenConfig) -> MsdSpleen:
 class MsdSpleen:
     def __init__(self, root: Path | str) -> None:
         self.task = Path(root) / TASK_DIR
+
+    def snapshot(self, dataset: Dataset) -> str:
+        if dataset.name != NAME:
+            raise DataError(f"MsdSpleen serves {NAME!r}, not {dataset.name!r}")
+        h = hashlib.sha256()
+        for _, image, label in self._list_cases():
+            for f in (image, label):
+                with f.open("rb") as fh:
+                    digest = hashlib.file_digest(fh, "sha256").hexdigest()
+                h.update(f"{f.relative_to(self.task).as_posix()}\0{digest}\n".encode())
+        return "sha256:" + h.hexdigest()
 
     def load(self, dataset: Dataset, preprocessing: dict[str, Any]) -> DataSplits:
         if dataset.name != NAME:

@@ -133,6 +133,9 @@ def test_data_provider_refuses_other_dataset(spec):
 
 def test_failure_during_training_marks_run_failed(spec):
     class Boom:
+        def snapshot(self, dataset: Dataset) -> None:
+            return None
+
         def load(self, dataset: Dataset, preprocessing: dict[str, Any]):
             raise OSError("disk on fire")
 

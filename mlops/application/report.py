@@ -63,6 +63,7 @@ def _header(b: Bundle) -> str:
     if s.meta.tags:
         rows.append(("tags", ", ".join(s.meta.tags)))
     rows.append(("environment", _env_verdict(b)))
+    rows.append(("data", _data_verdict(b)))
     return "\n".join(lines) + "\n" + _table(("field", "value"), rows)
 
 
@@ -162,9 +163,24 @@ def _env_verdict(b: Bundle) -> str:
     return "not verified (" + ", ".join(bad) + ")"
 
 
+def _data_verdict(b: Bundle) -> str:
+    check = b.manifest.data_snapshot
+    if check is None:
+        return "not recorded"
+    return "verified" if check.status == "ok" else f"not verified (dataset.snapshot {check.status})"
+
+
+def _checks(b: Bundle) -> str:
+    checks = dict(b.manifest.environment.checks) if b.manifest.environment else {}
+    if b.manifest.data_snapshot is not None:
+        checks["dataset.snapshot"] = b.manifest.data_snapshot
+    return _table(("pin", "status", "detail"), [(n, c.status, c.detail) for n, c in checks.items()])
+
+
 def _environment(b: Bundle) -> str:
     s, record = b.spec, b.manifest.environment
     out = "## Environment\n\n"
+    data = "\n\n" + _checks(b) if b.manifest.data_snapshot is not None else ""
     if record is None:
         rows = [
             ("code.commit", f"`{s.code.commit}`"),
@@ -176,14 +192,14 @@ def _environment(b: Bundle) -> str:
             "Not recorded for this run: commit and image digest are only **declared** by the spec "
             "and not verified against what actually ran."
         )
-        return out + note + "\n\n" + _table(("field", "value"), rows)
+        return out + note + "\n\n" + _table(("field", "value"), rows) + data
 
     verdict = (
         "The code and image this run ran on match the spec's pins."
         if record.verified
         else "**Not verified**: the run cannot be shown to have run exactly what the spec pins."
     )
-    checks = _table(("pin", "status", "detail"), [(n, c.status, c.detail) for n, c in record.checks.items()])
+    checks = _checks(b)
     a = record.actual
     actual = [
         ("python", a.python),
