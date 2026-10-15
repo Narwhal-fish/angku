@@ -181,3 +181,54 @@ def test_killed_ray_run_with_launch_record_is_resumable(spec, store):
     save_launch(store, run_id, LaunchRecord(launcher="ray", attempt=1, checkpoint_every=1, storage_path="/s"))
     (s,) = list_runs(store)
     assert s.status == "INTERRUPTED" and s.resumable
+
+
+# --- tolerance: runs from different launchers agree only to the last bits ---
+
+
+def _two_with(store, spec, changes):
+    """Two attempts of ``spec``; the second's final metrics updated with ``changes(final)``."""
+    from dataclasses import replace
+
+    for attempt in (1, 2):
+        _run(store, spec, attempt=attempt)
+    runs = list_runs(store)
+    runs[1] = replace(runs[1], final_metrics={**runs[1].final_metrics, **changes(runs[1].final_metrics)})
+    return runs
+
+
+def test_atol_tolerates_last_bit_drift(spec, store):
+    runs = _two_with(store, spec, changes=lambda m: {"val/loss": m["val/loss"] + 1e-9})
+    (exact,) = group_by_experiment(runs)
+    assert exact.metrics_agree is False and set(exact.spread) == {"val/loss"}
+    (tolerant,) = group_by_experiment(runs, atol=1e-6)
+    assert tolerant.metrics_agree is True and tolerant.spread == {} and tolerant.atol == 1e-6
+
+
+def test_atol_still_flags_a_real_difference(spec, store):
+    runs = _two_with(store, spec, changes=lambda m: {"val/loss": m["val/loss"] + 0.1})
+    (g,) = group_by_experiment(runs, atol=1e-6)
+    assert g.metrics_agree is False and set(g.spread) == {"val/loss"}
+
+
+def test_nan_agrees_only_with_nan_whatever_the_tolerance(spec, store):
+    import math
+
+    runs = _two_with(store, spec, changes=lambda m: {"val/loss": math.nan})
+    (g,) = group_by_experiment(runs, atol=1e9)
+    assert g.metrics_agree is False
+    runs = _two_with(InMemoryArtifactStore(), spec, changes=lambda m: {"val/x": math.nan})
+    from dataclasses import replace
+
+    runs[0] = replace(runs[0], final_metrics={**runs[0].final_metrics, "val/x": math.nan})
+    (g,) = group_by_experiment(runs, atol=1e-6)
+    assert g.metrics_agree is True
+
+
+def test_summary_carries_the_keep_best_record(spec, store):
+    from mlops.domain.best import BestCriterion
+
+    _run(store, spec, keep_best=BestCriterion(metric="val/loss", mode="min"))
+    (s,) = list_runs(store)
+    assert s.best is not None and (s.best.metric, s.best.epoch) == ("val/loss", 1)
+    assert s.to_dict()["best"] == {"metric": "val/loss", "mode": "min", "epoch": 1, "value": s.best.value}

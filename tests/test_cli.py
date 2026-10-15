@@ -804,3 +804,16 @@ def test_diff_says_where_the_curves_split(tmp_path, capsys):
     assert main(["diff", a, c, "--artifacts", str(art), "--atol", "1e-9"]) == 1
     out = capsys.readouterr().out
     assert "history: identical for 0 epochs, first differs at epoch 1" in out and "train/loss" in out
+
+
+def test_list_atol_and_best(tmp_path, capsys):
+    art = tmp_path / "artifacts"
+    _run_json(capsys, str(SMOKE), "--artifacts", str(art), "--keep-best", "val/loss:min")
+    _run_json(capsys, str(SMOKE), "--artifacts", str(art), "--attempt", "2")
+    assert main(["list", "--artifacts", str(art), "--atol", "1e-6"]) == 0
+    out = capsys.readouterr().out
+    assert "2 finished, final metrics agree within 1e-06" in out
+    assert "best val/loss@1" in out
+    assert main(["list", "--artifacts", str(art), "--atol", "1e-6", "--json"]) == 0
+    (g,) = json.loads(capsys.readouterr().out)
+    assert g["atol"] == 1e-6 and g["metrics_agree"] is True

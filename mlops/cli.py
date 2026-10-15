@@ -19,7 +19,7 @@ concrete adapters (tracker, data provider, artifact store) and hands them to
                                  [--device cpu] [--atol X] [--json]
     mlops report RUN_ID --artifacts DIR [--out FILE]
     mlops diff   RUN_A RUN_B --artifacts DIR [--artifacts-b DIR] [--atol X] [--json]
-    mlops list   --artifacts DIR [--experiment ID_PREFIX] [--json]
+    mlops list   --artifacts DIR [--experiment ID_PREFIX] [--atol X] [--json]
     mlops snapshot experiment.yaml [--data-root DIR]
 
 Exit codes: 0 ok, 1 training failed / bundle not reproduced / diff: different experiments,
@@ -535,7 +535,8 @@ def _print_diff(d: RunDiff) -> None:
 def cmd_list(args: argparse.Namespace) -> int:
     if not Path(args.artifacts).is_dir():
         raise CliError(f"no such directory: {args.artifacts}")
-    groups = group_by_experiment(list_runs(LocalArtifactStore(args.artifacts), experiment=args.experiment))
+    groups = group_by_experiment(list_runs(LocalArtifactStore(args.artifacts), experiment=args.experiment),
+                                 atol=args.atol)
     if args.json:
         print(json.dumps([g.to_dict() for g in groups], indent=2))
     elif not groups:
@@ -552,7 +553,8 @@ def _print_group(g: ExperimentGroup) -> None:
     if g.metrics_agree is None:
         verdict = f"{g.finished} finished"
     elif g.metrics_agree:
-        verdict = f"{g.finished} finished, final metrics identical"
+        same = "identical" if g.atol == 0 else f"agree within {g.atol:g}"
+        verdict = f"{g.finished} finished, final metrics {same}"
     else:
         ranges = ", ".join(f"{k} {_fmt(lo)}..{_fmt(hi)}" for k, (lo, hi) in g.spread.items())
         verdict = f"{g.finished} finished, final metrics DIFFER: {ranges}"
@@ -561,6 +563,8 @@ def _print_group(g: ExperimentGroup) -> None:
         attempt = f"a{r.attempt}" if r.attempt is not None else "a?"
         epochs = f"{r.epochs_done if r.epochs_done is not None else '?'}/{r.epochs_total or '?'} ep"
         notes = []
+        if r.best is not None and r.best.epoch is not None:
+            notes.append(f"best {r.best.metric}@{r.best.epoch}")
         if r.resumes:
             notes.append(f"resumed x{r.resumes}")
         if r.resumable:
@@ -724,6 +728,8 @@ def build_parser() -> argparse.ArgumentParser:
                                      "each experiment's finished attempts agree")
     ls.add_argument("--artifacts", metavar="DIR", required=True, help="artifact root to scan")
     ls.add_argument("--experiment", metavar="ID", help="only this ExperimentID (a prefix is enough)")
+    ls.add_argument("--atol", type=float, default=0.0, metavar="X",
+                    help="final metrics within X of each other count as agreeing (default 0: exact)")
     ls.add_argument("--json", action="store_true", help="machine-readable listing on stdout")
     ls.set_defaults(func=cmd_list)
 

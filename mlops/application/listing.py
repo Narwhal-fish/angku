@@ -3,7 +3,8 @@
 Reads ``spec.json`` + ``manifest.json`` only (never weights), so scanning hundreds of
 SwinUNETR bundles is cheap. ``group_by_experiment`` answers the question content-addressed
 ids exist for: did every FINISHED attempt of this ExperimentID end with the same final
-metrics?
+metrics? Exactly by default; ``atol`` > 0 accepts runs whose final metrics are within ``atol``
+of each other (max - min), for runs from different launchers. NaN agrees only with NaN.
 
 Statuses: FINISHED / FAILED (from the manifest), INTERRUPTED (no manifest but a
 checkpoint.pt or a Ray launch.json: killed, resumable), INCOMPLETE (no manifest, no checkpoint), UNREADABLE
@@ -20,6 +21,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from mlops.application.bundle import CHECKPOINT, LAUNCH, MANIFEST, SPEC
+from mlops.domain.best import BestRecord
 from mlops.domain.experiment import ExperimentSpec
 from mlops.domain.identity import compute_experiment_id
 from mlops.domain.manifest import RunManifest
@@ -41,6 +43,7 @@ class RunSummary:
     # A checkpoint exists and the run did not finish: `mlops resume` can continue it.
     resumable: bool = False
     error: str | None = None
+    best: BestRecord | None = None  # keep-best runs: which epoch best.pt holds
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -49,6 +52,7 @@ class RunSummary:
             "epochs_total": self.epochs_total,
             "final_metrics": {k: None if math.isnan(v) else v for k, v in self.final_metrics.items()},
             "workers": self.workers, "resumes": self.resumes, "resumable": self.resumable, "error": self.error,
+            "best": self.best.model_dump() if self.best is not None else None,
         }
 
 
@@ -57,6 +61,7 @@ class ExperimentGroup:
     experiment_id: str
     name: str
     runs: list[RunSummary]
+    atol: float = 0.0
 
     @property
     def finished(self) -> int:
@@ -64,14 +69,18 @@ class ExperimentGroup:
 
     @property
     def spread(self) -> dict[str, tuple[float, float]]:
-        """(min, max) of every final metric that differs between the FINISHED runs."""
+        """(min, max) of every final metric that differs (by more than ``atol``) between the
+        FINISHED runs. A metric NaN in some runs and defined in others always differs."""
         done = [r.final_metrics for r in self.runs if r.status == "FINISHED"]
         out: dict[str, tuple[float, float]] = {}
         for k in sorted({k for m in done for k in m}):
             values = [m.get(k, math.nan) for m in done]
-            if len({_key(v) for v in values}) > 1:
-                defined = [v for v in values if not math.isnan(v)] or [math.nan]
-                out[k] = (min(defined), max(defined))
+            defined = [v for v in values if not math.isnan(v)]
+            if not defined:
+                continue  # NaN everywhere: undefined alike
+            lo, hi = min(defined), max(defined)
+            if len(defined) < len(values) or hi - lo > self.atol:
+                out[k] = (lo, hi)
         return out
 
     @property
@@ -82,7 +91,7 @@ class ExperimentGroup:
     def to_dict(self) -> dict[str, Any]:
         return {
             "experiment_id": self.experiment_id, "name": self.name, "finished": self.finished,
-            "metrics_agree": self.metrics_agree,
+            "metrics_agree": self.metrics_agree, "atol": self.atol,
             "spread": {k: list(v) for k, v in self.spread.items()},
             "runs": [r.to_dict() for r in self.runs],
         }
@@ -101,11 +110,11 @@ def list_runs(store: ArtifactStore, *, experiment: str | None = None) -> list[Ru
     return sorted(out, key=lambda r: (r.name, r.experiment_id, r.attempt or 0, r.run_id))
 
 
-def group_by_experiment(runs: list[RunSummary]) -> list[ExperimentGroup]:
+def group_by_experiment(runs: list[RunSummary], *, atol: float = 0.0) -> list[ExperimentGroup]:
     groups: dict[str, list[RunSummary]] = {}
     for r in runs:
         groups.setdefault(r.experiment_id, []).append(r)
-    return [ExperimentGroup(exp, rs[0].name, rs) for exp, rs in groups.items()]
+    return [ExperimentGroup(exp, rs[0].name, rs, atol) for exp, rs in groups.items()]
 
 
 def _summarise(store: ArtifactStore, run_id: str, files: list[str]) -> RunSummary:
@@ -131,8 +140,5 @@ def _summarise(store: ArtifactStore, run_id: str, files: list[str]) -> RunSummar
         final_metrics=dict(manifest.history[-1]) if manifest.history else {},
         resumes=len(manifest.resumes),
         resumable=has_ckpt and manifest.status != "FINISHED",
+        best=manifest.best,
     )
-
-
-def _key(v: float) -> Any:
-    return "nan" if math.isnan(v) else v
