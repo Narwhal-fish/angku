@@ -789,3 +789,18 @@ def test_rayjob_checkpointing_submit_says_how_to_resume(capsys, monkeypatch):
     assert main(["rayjob", str(BASELINE), *_RESUMABLE, "--checkpoint-every", "5", "--submit"]) == 0
     out = capsys.readouterr().out
     assert "--resume" in out and "--ray-storage-pvc ray-ckpt" in out
+
+
+def test_diff_says_where_the_curves_split(tmp_path, capsys):
+    art = tmp_path / "artifacts"
+    three = _write_yaml(tmp_path / "a.yaml", **{"training.epochs": 3})
+    a = _run_json(capsys, str(three), "--artifacts", str(art))
+    b = _run_json(capsys, str(three), "--artifacts", str(art), "--attempt", "2")
+    assert main(["diff", a, b, "--artifacts", str(art)]) == 0
+    assert "history: identical over all 3 epochs" in capsys.readouterr().out
+
+    c = _run_json(capsys, str(_write_yaml(tmp_path / "s.yaml", **{"training.epochs": 3, "training.seed": 7})),
+                  "--artifacts", str(art))
+    assert main(["diff", a, c, "--artifacts", str(art), "--atol", "1e-9"]) == 1
+    out = capsys.readouterr().out
+    assert "history: identical for 0 epochs, first differs at epoch 1" in out and "train/loss" in out

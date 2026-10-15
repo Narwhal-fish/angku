@@ -186,3 +186,96 @@ def test_to_dict_is_json_ready(spec, store):
     assert out["same_experiment"] is False
     first = out["experiment"][0]
     assert first == {"path": "metrics.0.name", "b": "dice"}  # absent side is omitted
+
+
+# --- history: where the curves split ---
+
+
+def _three(spec):
+    return _with(spec, training__epochs=3)
+
+
+def _edit_history(store, run_id, epoch, key, value):
+    from mlops.domain.manifest import RunManifest
+
+    m = RunManifest.model_validate_json(store.get(run_id, MANIFEST))
+    history = [dict(r) for r in m.history]
+    history[epoch - 1][key] = value
+    store.put(run_id, MANIFEST, m.model_copy(update={"history": history}).model_dump_json().encode())
+
+
+def test_identical_histories(spec, store):
+    a, b = _run(store, _three(spec)), _run(store, _three(spec), attempt=2)
+    h = diff_runs(store, a, store, b).history
+    assert (h.epochs_a, h.epochs_b, h.first_divergence) == (3, 3, None)
+    assert h.identical_epochs == 3 and h.at_divergence == []
+
+
+def test_different_seeds_split_at_epoch_1(spec, store):
+    a, b = _run(store, _three(spec)), _run(store, _with(_three(spec), training__seed=7))
+    h = diff_runs(store, a, store, b).history
+    assert h.first_divergence == 1 and h.identical_epochs == 0
+    assert "train/loss" in {m.name for m in h.at_divergence}
+
+
+def test_split_later_names_only_the_metrics_that_differ(spec, store):
+    a, b = _run(store, _three(spec)), _run(store, _three(spec), attempt=2)
+    _edit_history(store, b, 2, "val/loss", 9.0)
+    h = diff_runs(store, a, store, b).history
+    assert h.first_divergence == 2 and h.identical_epochs == 1
+    ((m,),) = [h.at_divergence]
+    assert m.name == "val/loss" and m.b == 9.0
+
+
+def test_different_lengths_compare_the_common_epochs(spec, store):
+    a, b = _run(store, _three(spec)), _run(store, _with(spec, training__epochs=2))
+    h = diff_runs(store, a, store, b).history
+    assert (h.epochs_a, h.epochs_b, h.first_divergence, h.identical_epochs) == (3, 2, None, 2)
+
+
+def test_tolerance_and_nan(spec, store):
+    a, b = _run(store, _three(spec)), _run(store, _three(spec), attempt=2)
+    from mlops.domain.manifest import RunManifest
+
+    v = RunManifest.model_validate_json(store.get(b, MANIFEST)).history[1]["val/loss"]
+    _edit_history(store, b, 2, "val/loss", v + 1e-9)
+    assert diff_runs(store, a, store, b).history.first_divergence == 2
+    assert diff_runs(store, a, store, b, atol=1e-6).history.first_divergence is None
+    _edit_history(store, a, 3, "val/loss", math.nan)
+    _edit_history(store, b, 3, "val/loss", math.nan)
+    assert diff_runs(store, a, store, b, atol=1e-6).history.first_divergence is None  # NaN == NaN
+
+
+def test_metric_on_one_side_only_is_a_divergence(spec, store):
+    a, b = _run(store, _three(spec)), _run(store, _three(spec), attempt=2)
+    _edit_history(store, b, 1, "val/extra", 1.0)
+    h = diff_runs(store, a, store, b).history
+    assert h.first_divergence == 1
+    assert [(m.name, m.a, m.b) for m in h.at_divergence] == [("val/extra", ABSENT, 1.0)]
+
+
+def test_no_history_without_a_manifest(spec, store):
+    a, b = _run(store, spec), _run(store, spec, attempt=2)
+    store._runs[b].pop(MANIFEST)
+    assert diff_runs(store, a, store, b).history is None
+
+
+def test_keep_best_records_are_compared(spec, store):
+    from mlops.domain.best import BestCriterion
+
+    a = _run(store, _three(spec), keep_best=BestCriterion(metric="val/loss", mode="min"))
+    b = _run(store, _three(spec), attempt=2, keep_best=BestCriterion(metric="val/loss", mode="max"))
+    d = diff_runs(store, a, store, b)
+    assert Change("best.mode", "min", "max") in d.best
+    assert diff_runs(store, a, store, a).best == []
+
+
+def test_history_in_to_dict(spec, store):
+    import json
+
+    a, b = _run(store, _three(spec)), _run(store, _with(_three(spec), training__seed=7))
+    out = json.loads(json.dumps(diff_runs(store, a, store, b).to_dict()))
+    h = out["history"]
+    assert h["first_divergence"] == 1 and h["epochs_a"] == 3 and h["identical_epochs"] == 0
+    assert {m["name"] for m in h["at_divergence"]} >= {"train/loss"}
+    assert out["best"] == []

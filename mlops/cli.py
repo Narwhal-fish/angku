@@ -18,7 +18,7 @@ concrete adapters (tracker, data provider, artifact store) and hands them to
     mlops reproduce RUN_ID --artifacts DIR [--data-root DIR] [--tracker mlflow|inmemory] [--mlflow-uri URI]
                                  [--device cpu] [--atol X] [--json]
     mlops report RUN_ID --artifacts DIR [--out FILE]
-    mlops diff   RUN_A RUN_B --artifacts DIR [--artifacts-b DIR] [--json]
+    mlops diff   RUN_A RUN_B --artifacts DIR [--artifacts-b DIR] [--atol X] [--json]
     mlops list   --artifacts DIR [--experiment ID_PREFIX] [--json]
     mlops snapshot experiment.yaml [--data-root DIR]
 
@@ -64,7 +64,7 @@ from mlops.application import RunnerError
 from mlops.application.bundle import LAUNCH, MANIFEST, SPEC, load_bundle, load_checkpoint, load_launch
 from mlops.application.launch import Launcher, LocalLauncher
 from mlops.application.runner import verify_data
-from mlops.application.diff import ABSENT, Change, RunDiff, diff_runs
+from mlops.application.diff import ABSENT, Change, HistoryDiff, RunDiff, diff_runs
 from mlops.application.listing import ExperimentGroup, group_by_experiment, list_runs
 from mlops.application.report import render_report, write_report
 from mlops.application.reproduce import ReproduceError, ReproduceReport, reproduce_run
@@ -465,7 +465,7 @@ def cmd_diff(args: argparse.Namespace) -> int:
     store_a = LocalArtifactStore(args.artifacts)
     store_b = LocalArtifactStore(args.artifacts_b) if args.artifacts_b else store_a
     try:
-        d = diff_runs(store_a, args.run_a, store_b, args.run_b)
+        d = diff_runs(store_a, args.run_a, store_b, args.run_b, atol=args.atol)
     except ArtifactError as e:
         raise CliError(str(e)) from e
     if args.json:
@@ -492,6 +492,22 @@ def _print_changes(title: str, changes: list[Change]) -> None:
         print(f"  {c.path:<{width}}  {_fmt(c.a)} -> {_fmt(c.b)}")
 
 
+def _print_history(h: HistoryDiff | None) -> None:
+    if h is None:
+        return
+    if h.first_divergence is None:
+        if h.epochs_a == h.epochs_b:
+            print(f"history: identical over all {h.epochs_a} epochs")
+        else:
+            print(f"history: identical over the {h.identical_epochs} common epochs "
+                  f"(a has {h.epochs_a}, b has {h.epochs_b})")
+        return
+    print(f"history: identical for {h.identical_epochs} epochs, first differs at epoch {h.first_divergence}")
+    width = max(len(m.name) for m in h.at_divergence)
+    for m in h.at_divergence:
+        print(f"  {m.name:<{width}}  {_fmt(m.a)} -> {_fmt(m.b)}")
+
+
 def _print_diff(d: RunDiff) -> None:
     def side(run: str, attempt: int | None, status: str) -> str:
         return f"{run[:12]} (attempt {attempt if attempt is not None else '?'}, {status})"
@@ -506,6 +522,8 @@ def _print_diff(d: RunDiff) -> None:
     _print_changes("run (RunID only):", d.run)
     _print_changes("labels (in no id):", d.labels)
     _print_changes("environment (what each run ran on):", d.environment)
+    _print_history(d.history)
+    _print_changes("best (keep-best):", d.best)
     if d.metrics:
         print("final metrics:")
         width = max(len(m.name) for m in d.metrics)
@@ -696,6 +714,9 @@ def build_parser() -> argparse.ArgumentParser:
     df.add_argument("run_b")
     df.add_argument("--artifacts", metavar="DIR", required=True, help="artifact root holding run_a (and run_b)")
     df.add_argument("--artifacts-b", metavar="DIR", help="artifact root holding run_b, if it is elsewhere")
+    df.add_argument("--atol", type=float, default=0.0, metavar="X",
+                    help="history values within X count as equal (default 0: exact; >0 for runs "
+                         "from different launchers)")
     df.add_argument("--json", action="store_true", help="machine-readable diff on stdout")
     df.set_defaults(func=cmd_diff)
 

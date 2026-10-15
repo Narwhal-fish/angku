@@ -11,6 +11,9 @@ Sections, in order of how much they matter for identity:
     labels       in no id: meta, tracking, code.repo, environment.image, dataset.version
     environment  what each run actually ran on (manifest.environment.actual)
     metrics      final value of every metric, side by side
+    history      where the curves split: the first epoch whose metrics differ (exact, NaN == NaN,
+                 or within ``atol``) and the values there; compared over the common epochs
+    best         the keep-best records (``manifest.best``)
 
 Nested dicts and lists of sections (augmentation, metrics) are flattened to dotted paths
 (``augmentation.0.params.prob``); a list of scalars is one value. A path present on one side
@@ -74,6 +77,29 @@ class MetricPair:
 
 
 @dataclass(frozen=True)
+class HistoryDiff:
+    epochs_a: int
+    epochs_b: int
+    first_divergence: int | None  # 1-based; None = the common epochs are identical
+    at_divergence: list[MetricPair] = field(default_factory=list)  # only the metrics that differ
+
+    @property
+    def identical_epochs(self) -> int:
+        if self.first_divergence is None:
+            return min(self.epochs_a, self.epochs_b)
+        return self.first_divergence - 1
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "epochs_a": self.epochs_a,
+            "epochs_b": self.epochs_b,
+            "identical_epochs": self.identical_epochs,
+            "first_divergence": self.first_divergence,
+            "at_divergence": [m.to_dict() for m in self.at_divergence],
+        }
+
+
+@dataclass(frozen=True)
 class RunDiff:
     run_a: str
     run_b: str
@@ -88,6 +114,8 @@ class RunDiff:
     labels: list[Change] = field(default_factory=list)
     environment: list[Change] = field(default_factory=list)
     metrics: list[MetricPair] = field(default_factory=list)
+    history: HistoryDiff | None = None  # None when either run has no manifest
+    best: list[Change] = field(default_factory=list)
 
     @property
     def same_experiment(self) -> bool:
@@ -112,11 +140,16 @@ class RunDiff:
             "labels": [c.to_dict() for c in self.labels],
             "environment": [c.to_dict() for c in self.environment],
             "metrics": [m.to_dict() for m in self.metrics],
+            "history": self.history.to_dict() if self.history is not None else None,
+            "best": [c.to_dict() for c in self.best],
         }
 
 
-def diff_runs(store_a: ArtifactStore, run_a: str, store_b: ArtifactStore, run_b: str) -> RunDiff:
-    """Raise ``ArtifactError`` when either run has no ``spec.json``."""
+def diff_runs(
+    store_a: ArtifactStore, run_a: str, store_b: ArtifactStore, run_b: str, *, atol: float = 0.0
+) -> RunDiff:
+    """Raise ``ArtifactError`` when either run has no ``spec.json``. ``atol`` > 0 lets the history
+    comparison tolerate last-bit drift (runs from different launchers)."""
     spec_a, man_a = _read(store_a, run_a)
     spec_b, man_b = _read(store_b, run_b)
     attempt_a = man_a.attempt if man_a else None
@@ -143,6 +176,8 @@ def diff_runs(store_a: ArtifactStore, run_a: str, store_b: ArtifactStore, run_b:
         labels=_changes(_flatten(_labels(spec_a)), _flatten(_labels(spec_b))),
         environment=diff_environments(man_a, man_b),
         metrics=_metrics(man_a, man_b),
+        history=_history(man_a, man_b, atol) if man_a and man_b else None,
+        best=_changes(_flatten(_best(man_a)), _flatten(_best(man_b))),
     )
 
 
@@ -186,6 +221,28 @@ def _metrics(a: RunManifest | None, b: RunManifest | None) -> list[MetricPair]:
     final_b = b.history[-1] if b and b.history else {}
     names = [*final_a, *(k for k in final_b if k not in final_a)]
     return [MetricPair(k, final_a.get(k, ABSENT), final_b.get(k, ABSENT)) for k in names]
+
+
+def _history(a: RunManifest, b: RunManifest, atol: float) -> HistoryDiff:
+    for epoch, (ra, rb) in enumerate(zip(a.history, b.history), start=1):
+        names = [*ra, *(k for k in rb if k not in ra)]
+        differ = [MetricPair(k, ra.get(k, ABSENT), rb.get(k, ABSENT)) for k in names
+                  if not _same(ra.get(k, ABSENT), rb.get(k, ABSENT), atol)]
+        if differ:
+            return HistoryDiff(len(a.history), len(b.history), epoch, differ)
+    return HistoryDiff(len(a.history), len(b.history), None)
+
+
+def _same(x: Any, y: Any, atol: float) -> bool:
+    if x is ABSENT or y is ABSENT:
+        return x is y
+    if math.isnan(x) or math.isnan(y):  # NaN = undefined that epoch: equal only to itself
+        return math.isnan(x) and math.isnan(y)
+    return x == y if atol == 0 else abs(x - y) <= atol
+
+
+def _best(m: RunManifest | None) -> dict[str, Any]:
+    return {"best": m.best.model_dump()} if m is not None and m.best is not None else {}
 
 
 def _flatten(value: Any, prefix: str = "") -> dict[str, Any]:
