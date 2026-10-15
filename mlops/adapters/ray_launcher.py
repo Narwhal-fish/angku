@@ -50,7 +50,8 @@ from mlops.application.bundle import (
     save_launch,
     save_spec,
 )
-from mlops.application.runner import RunnerError, RunResult, Worker, train_worker, verify_data
+from mlops.application.runner import RunnerError, RunResult, Worker, resumed_criterion, train_worker, verify_data
+from mlops.domain.best import BestCriterion, best_record
 from mlops.domain.environment import EnvCheck, EnvironmentRecord, record_environment
 from mlops.domain.experiment import ExperimentSpec
 from mlops.domain.identity import compute_experiment_id, compute_run_id
@@ -62,6 +63,7 @@ from mlops.ports.tracking import RunStatus, Tracker
 from mlops.registry import discover
 
 _STATE_FILE = "model.pt"  # final weights, rank 0
+_BEST_FILE = "best.pt"  # keep-best: best epoch's weights, rank 0, final checkpoint only
 # Mid-run checkpoints (checkpoint_every): Ray merges every rank's files into one directory.
 _TRAIN_STATE = "state.pt"  # rank 0: weights, optimizer, history, environment, resume points
 _RNG_FILE = "rng-{rank}.pt"  # every rank: its own RNG states (ranks draw different augmentations)
@@ -75,6 +77,7 @@ def _train_loop(config: dict[str, Any]) -> dict[str, Any] | None:
     discover(config["experiments"])
 
     spec = ExperimentSpec.model_validate_json(config["spec"])
+    keep_best = BestCriterion.parse(config["keep_best"]) if config["keep_best"] else None
     ctx = ray.train.get_context()
     worker = Worker(rank=ctx.get_world_rank(), world_size=ctx.get_world_size())
     device = ray.train.torch.get_device()
@@ -113,10 +116,11 @@ def _train_loop(config: dict[str, Any]) -> dict[str, Any] | None:
             torch.save({
                 "epoch": state.epoch, "history": state.history, "world_size": worker.world_size,
                 "model": dict(state.model_state), "optimizer": state.optimizer_state, **start_info,
+                "best_model": state.best_model_state,
             }, os.path.join(d, _TRAIN_STATE))
         ray.train.report({"epoch": state.epoch, "checkpoint": 1.0}, checkpoint=Checkpoint.from_directory(d))
 
-    model, history = train_worker(
+    model, history, best_state = train_worker(
         spec,
         data=config["data"],
         device=device,
@@ -127,12 +131,15 @@ def _train_loop(config: dict[str, Any]) -> dict[str, Any] | None:
         resume_from=resume_from,
         checkpoint_every=config["checkpoint_every"],
         on_checkpoint=on_checkpoint,
+        keep_best=keep_best,
     )
 
     checkpoint = None
     if worker.is_leader:
         d = tempfile.mkdtemp(prefix="mlops-ckpt-")
         torch.save(model.state_dict(), os.path.join(d, _STATE_FILE))
+        if best_state is not None:
+            torch.save(best_state, os.path.join(d, _BEST_FILE))
         checkpoint = Checkpoint.from_directory(d)
     ray.train.report({"epoch": len(history), "done": 1.0}, checkpoint=checkpoint)
     if not worker.is_leader:
@@ -161,7 +168,7 @@ def _restore(worker: Worker) -> tuple[TrainState, EnvironmentRecord | None, list
             )
         rng = torch.load(rng_file, map_location="cpu", weights_only=True)
     state = TrainState(epoch=st["epoch"], history=st["history"], model_state=st["model"],
-                       optimizer_state=st["optimizer"], rng=rng)
+                       optimizer_state=st["optimizer"], rng=rng, best_model_state=st.get("best_model"))
     environment = EnvironmentRecord.model_validate_json(st["environment"]) if st["environment"] else None
     return state, environment, [ResumePoint.model_validate_json(r) for r in st["resumes"]]
 
@@ -248,6 +255,7 @@ class RayLauncher:
         checkpoint_every: int | None = None,
         resume: bool = False,
         keep_checkpoint: bool = False,
+        keep_best: BestCriterion | None = None,
     ) -> RunResult:
         experiment_id = compute_experiment_id(spec)
         run_id = compute_run_id(experiment_id, spec.resources, attempt)
@@ -260,13 +268,16 @@ class RayLauncher:
         if resume:
             assert artifacts is not None
             _refuse_if_finished(artifacts, run_id)
+            try:
+                record = load_launch(artifacts, run_id)
+            except ArtifactError:
+                record = None
+            stored = BestCriterion.parse(record.keep_best) if record is not None and record.keep_best else None
+            keep_best = resumed_criterion(keep_best, stored)
             if "://" not in storage and not any(p.is_dir() for p in (Path(storage) / name).glob("checkpoint_*")):
                 raise RunnerError(f"no Ray checkpoint for run {run_id} under {Path(storage) / name}: nothing to resume")
-            if checkpoint_every is None:
-                try:
-                    checkpoint_every = load_launch(artifacts, run_id).checkpoint_every
-                except ArtifactError:
-                    pass
+            if checkpoint_every is None and record is not None:
+                checkpoint_every = record.checkpoint_every
         res = spec.resources
         use_gpu = res.gpu > 0 and device != "cpu"
 
@@ -288,6 +299,7 @@ class RayLauncher:
             save_spec(artifacts, run_id, spec)
             save_launch(artifacts, run_id, LaunchRecord(
                 launcher="ray", attempt=attempt, checkpoint_every=checkpoint_every, storage_path=storage,
+                keep_best=str(keep_best) if keep_best is not None else None,
             ))
         # num_cpus=0: schedulable anywhere (a KubeRay head has num-cpus=0) and never competes
         # with the training workers for CPUs.
@@ -298,6 +310,7 @@ class RayLauncher:
                 "metrics_queue": metrics_queue,
                 "checkpoint_every": checkpoint_every,
                 "resume": resume,
+                "keep_best": str(keep_best) if keep_best is not None else None,
                 "spec": spec.model_dump_json(),
                 "data": data,
                 "probe": probe,
@@ -326,6 +339,7 @@ class RayLauncher:
                 experiment_id=experiment_id, run_id=run_id, attempt=attempt,
                 status=status, device=dev, history=history, environment=environment,
                 data_snapshot=data_snapshot, resumes=resumes,
+                best=best_record(history, keep_best) if keep_best is not None and status == "FINISHED" else None,
             )
 
         def _take_start_info(info: dict[str, Any] | None) -> None:
@@ -348,8 +362,11 @@ class RayLauncher:
             _take_start_info(leader)
             if leader["data_snapshot"] is not None:
                 data_snapshot = EnvCheck.model_validate_json(leader["data_snapshot"])
+            best_state = None
             with result.checkpoint.as_directory() as d:
                 state = torch.load(Path(d) / _STATE_FILE, map_location="cpu", weights_only=True)
+                if (Path(d) / _BEST_FILE).exists():
+                    best_state = torch.load(Path(d) / _BEST_FILE, map_location="cpu", weights_only=True)
         except BaseException:
             try:  # keep every epoch that did finish, in the tracker and the FAILED manifest
                 history[:] = relay.stop()
@@ -364,7 +381,8 @@ class RayLauncher:
             metrics_queue.shutdown()
         tracker.end_run("FINISHED")
         if artifacts is not None:
-            save_bundle(artifacts, spec=spec, manifest=_manifest("FINISHED"), model_state=state)
+            save_bundle(artifacts, spec=spec, manifest=_manifest("FINISHED"), model_state=state,
+                        best_state=best_state)
         if not keep_checkpoint:
             # Ray's copies (latest checkpoint + final weights) are dead weight once model.pt is
             # written: nothing left to resume. Through Ray's filesystem, so s3:// storage works too.

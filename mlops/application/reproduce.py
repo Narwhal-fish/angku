@@ -24,6 +24,7 @@ import torch
 from mlops.application.bundle import Bundle, load_bundle
 from mlops.application.diff import Change, diff_environments
 from mlops.application.runner import run_experiment
+from mlops.domain.best import BestCriterion
 from mlops.ports.artifacts import ArtifactStore
 from mlops.ports.data import DataProvider
 from mlops.ports.environment import EnvironmentProbe
@@ -99,6 +100,9 @@ def reproduce_run(
         attempt=original.manifest.attempt,
         device=device,
         probe=probe,
+        # keep-best is a launch option, not in the spec: replay it so best.pt is checked too
+        keep_best=(BestCriterion(metric=original.manifest.best.metric, mode=original.manifest.best.mode)
+                   if original.manifest.best is not None else None),
     )
     replay = load_bundle(scratch, result.run_id)
 
@@ -140,18 +144,24 @@ def _check_history(original: Bundle, replay: Bundle) -> list[Mismatch]:
 
 
 def _check_weights(original: Bundle, replay: Bundle, atol: float) -> list[Mismatch]:
-    a, b = original.model_state or {}, replay.model_state or {}
+    out = _compare_states(original.model_state or {}, replay.model_state or {}, atol, "")
+    if original.best_state is not None or replay.best_state is not None:
+        out += _compare_states(original.best_state or {}, replay.best_state or {}, atol, "best.pt ")
+    return out
+
+
+def _compare_states(a: dict[str, Any], b: dict[str, Any], atol: float, prefix: str) -> list[Mismatch]:
     out: list[Mismatch] = []
     for k in sorted(set(a) ^ set(b)):
         side = "bundle" if k in a else "replay"
-        out.append(Mismatch("weights", f"{k}: only in {side}"))
+        out.append(Mismatch("weights", f"{prefix}{k}: only in {side}"))
     for k in sorted(set(a) & set(b)):
         ta, tb = a[k], b[k]
         if ta.shape != tb.shape or ta.dtype != tb.dtype:
-            out.append(Mismatch("weights", f"{k}: {tuple(ta.shape)}/{ta.dtype} vs {tuple(tb.shape)}/{tb.dtype}"))
+            out.append(Mismatch("weights", f"{prefix}{k}: {tuple(ta.shape)}/{ta.dtype} vs {tuple(tb.shape)}/{tb.dtype}"))
             continue
         same = torch.equal(ta, tb) if atol == 0 else torch.allclose(ta, tb, atol=atol, rtol=0)
         if not same:
             diff = (ta.float() - tb.float()).abs().max().item()
-            out.append(Mismatch("weights", f"{k}: max |diff| = {diff:.3g} (atol {atol:g})"))
+            out.append(Mismatch("weights", f"{prefix}{k}: max |diff| = {diff:.3g} (atol {atol:g})"))
     return out

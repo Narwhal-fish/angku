@@ -17,6 +17,7 @@ import math
 from typing import Any
 
 from mlops.application.bundle import Bundle, load_bundle
+from mlops.domain.best import BestRecord
 from mlops.domain.environment import EnvironmentRecord
 from mlops.domain.manifest import ResumePoint
 from mlops.ports.artifacts import ArtifactStore
@@ -67,9 +68,17 @@ def _header(b: Bundle) -> str:
         rows.append(("tags", ", ".join(s.meta.tags)))
     if m.resumes:
         rows.append(("resumed", ", ".join(_resume_point(r) for r in m.resumes)))
+    if m.best is not None:
+        rows.append(("best", _best(m.best)))
     rows.append(("environment", _env_verdict(b)))
     rows.append(("data", _data_verdict(b)))
     return "\n".join(lines) + "\n" + _table(("field", "value"), rows)
+
+
+def _best(best: BestRecord) -> str:
+    if best.epoch is None:
+        return f"`{best.metric}` ({best.mode}) never defined: no `best.pt`"
+    return f"`{best.metric}` ({best.mode}) = {_num(best.value)} at epoch {best.epoch}, `best.pt`"
 
 
 def _final_metrics(b: Bundle) -> str:

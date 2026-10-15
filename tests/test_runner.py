@@ -232,7 +232,7 @@ def test_train_worker_shards_data_by_rank(spec):
     data = SyntheticBlobs(n_train=8, n_val=0, shape=(8, 8, 8), in_channels=1, num_classes=2)
     for rank in (0, 1):
         current["rank"] = rank
-        model, history = train_worker(
+        model, history, _ = train_worker(
             spec, data=data, device=torch.device("cpu"), worker=Worker(rank=rank, world_size=2)
         )
         assert len(history) == 1 and math.isfinite(history[0]["train/loss"])
@@ -244,7 +244,7 @@ def test_train_worker_single_rank_matches_run_experiment(spec):
     from mlops.application.runner import train_worker
 
     epochs: list[tuple[int, dict[str, float]]] = []
-    model, history = train_worker(
+    model, history, _ = train_worker(
         spec, data=_data(), device=torch.device("cpu"), on_epoch=lambda e, m: epochs.append((e, m))
     )
     assert history == run_experiment(spec, data=_data(), tracker=InMemoryTracker()).history
@@ -261,7 +261,7 @@ def test_train_worker_wrap_model_hook_is_used(spec):
         wrapped.append(m)
         return m
 
-    model, _ = train_worker(spec, data=_data(), device=torch.device("cpu"), wrap_model=wrap)
+    model, _, _ = train_worker(spec, data=_data(), device=torch.device("cpu"), wrap_model=wrap)
     assert wrapped == [model]
 
 

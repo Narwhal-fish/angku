@@ -62,6 +62,7 @@ def render_rayjob(
     data_pvc: str | None = None,
     data_path: str = "/data",
     checkpoint_every: int | None = None,
+    keep_best: str | None = None,
     ray_storage_pvc: str | None = None,
     ray_storage_path: str = "/ray-storage",
     resume: bool = False,
@@ -82,6 +83,8 @@ def render_rayjob(
     """
     if not spec.is_pinned():
         raise UnpinnedInputError(spec.unpinned_inputs())
+    if keep_best and resume:
+        raise ValueError("keep_best is fixed when a run starts; a resume continues with the run's own")
     if checkpoint_every is not None and checkpoint_every < 1:
         raise ValueError(f"checkpoint_every must be >= 1, got {checkpoint_every}")
     if checkpoint_every or resume:
@@ -108,6 +111,8 @@ def render_rayjob(
         ]
         if ray_storage_pvc:
             entrypoint += ["--ray-storage", ray_storage_path]
+        if keep_best:
+            entrypoint += ["--keep-best", keep_best]
     if checkpoint_every:
         entrypoint += ["--checkpoint-every", str(checkpoint_every)]
     if mlflow_uri:

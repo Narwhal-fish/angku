@@ -41,6 +41,7 @@ from mlops.application.bundle import (
     save_checkpoint,
     save_spec,
 )
+from mlops.domain.best import BestCriterion, best_epoch, best_record
 from mlops.domain.environment import EnvCheck, EnvironmentRecord, check_snapshot, record_environment
 from mlops.domain.experiment import ExperimentSpec, Resources, Training
 from mlops.domain.identity import compute_experiment_id, compute_run_id
@@ -322,8 +323,11 @@ def train_worker(
     resume_from: TrainState | None = None,
     checkpoint_every: int | None = None,
     on_checkpoint: Callable[[TrainState], None] | None = None,
-) -> tuple[nn.Module, list[dict[str, float]]]:
-    """Run the epoch loop for one rank. Returns the (unwrapped) model and the full history.
+    keep_best: BestCriterion | None = None,
+) -> tuple[nn.Module, list[dict[str, float]], dict[str, Any] | None]:
+    """Run the epoch loop for one rank. Returns the (unwrapped) model, the full history and,
+    with ``keep_best``, the weights (on CPU) of the best epoch (None without it, or when the
+    metric was never defined). A ``keep_best`` metric missing from the first epoch's row raises.
 
     ``resume_from`` continues after ``resume_from.epoch`` with its weights, optimizer state
     and RNG states. ``on_checkpoint`` gets this rank's ``TrainState`` after every
@@ -385,10 +389,12 @@ def train_worker(
         torch.manual_seed(seed + worker.rank)
     loaders = {"train": train_loader, "val": val_loader}
     history: list[dict[str, float]] = []
+    best_state: dict[str, Any] | None = None
     if resume_from is not None:
         # Last, so it overrides every seeding above: the run continues mid-stream.
         _restore_rng(resume_from.rng, loaders)
         history = list(resume_from.history)
+        best_state = resume_from.best_model_state
     first = len(history) + 1
 
     if on_start is not None:
@@ -403,12 +409,21 @@ def train_worker(
         history.append(row)
         if on_epoch is not None:
             on_epoch(epoch, row)
+        if keep_best is not None:
+            if keep_best.metric not in row:
+                raise RunnerError(
+                    f"keep-best metric {keep_best.metric!r} is not logged; this run logs: {', '.join(sorted(row))}"
+                )
+            found = best_epoch(history, keep_best)
+            if found is not None and found[0] == epoch:  # a copy: the live weights keep training
+                best_state = {k: v.detach().to("cpu", copy=True) for k, v in model.state_dict().items()}
         if checkpoint_every and on_checkpoint is not None and epoch % checkpoint_every == 0:
             on_checkpoint(TrainState(
                 epoch=epoch, history=list(history), model_state=model.state_dict(),
                 optimizer_state=optimizer.state_dict(), rng=_capture_rng(loaders),
+                best_model_state=best_state,
             ))
-    return model, history
+    return model, history, best_state
 
 
 def verify_data(spec: ExperimentSpec, data: DataProvider) -> EnvCheck:
@@ -434,6 +449,7 @@ def run_experiment(
     checkpoint_every: int | None = None,
     resume: bool = False,
     keep_checkpoint: bool = False,
+    keep_best: BestCriterion | None = None,
 ) -> RunResult:
     """Train ``spec`` once, in this process. Raises ``UnpinnedInputError`` if the spec is not fully pinned.
 
@@ -446,7 +462,9 @@ def run_experiment(
     that checkpoint (a FAILED or killed run; not a FINISHED one): same tracker run, and the
     manifest's ``resumes`` records the epoch and this segment's environment. Once the run is
     FINISHED its ``checkpoint.pt`` is deleted (nothing left to resume; ``reproduce`` replays from
-    scratch) unless ``keep_checkpoint``; a FAILED run keeps it.
+    scratch) unless ``keep_checkpoint``; a FAILED run keeps it. ``keep_best`` also writes the
+    best epoch's weights as ``best.pt`` and ``manifest.best`` (FINISHED only); a resume continues
+    with the criterion stored in the checkpoint.
     Requires ``resources.workers == 1``; use a distributed launcher otherwise.
     """
     experiment_id = compute_experiment_id(spec)
@@ -468,6 +486,7 @@ def run_experiment(
         resumes = [*ckpt.resumes, ResumePoint(epoch=ckpt.epoch, environment=segment_env)]
         history = list(ckpt.history)
         checkpoint_every = checkpoint_every or ckpt.checkpoint_every
+        keep_best = resumed_criterion(keep_best, ckpt.keep_best)
     started = False
 
     def _manifest(status: RunStatus) -> RunManifest:
@@ -481,6 +500,7 @@ def run_experiment(
             environment=environment,
             data_snapshot=data_snapshot,
             resumes=resumes,
+            best=best_record(history, keep_best) if keep_best is not None and status == "FINISHED" else None,
         )
 
     data_snapshot: EnvCheck | None = None
@@ -507,14 +527,14 @@ def run_experiment(
             spec_saved = True
         save_checkpoint(artifacts, Checkpoint(
             experiment_id=experiment_id, run_id=run_id, attempt=attempt, checkpoint_every=checkpoint_every,
-            state=state, environment=environment, resumes=resumes,
+            state=state, environment=environment, resumes=resumes, keep_best=keep_best,
         ))
 
     try:
-        model, _ = train_worker(
+        model, _, best_state = train_worker(
             spec, data=data, device=dev, on_start=on_start, on_epoch=on_epoch, on_data=on_data,
             resume_from=ckpt.state if ckpt is not None else None,
-            checkpoint_every=checkpoint_every, on_checkpoint=on_checkpoint,
+            checkpoint_every=checkpoint_every, on_checkpoint=on_checkpoint, keep_best=keep_best,
         )
     except BaseException:
         if started:
@@ -524,7 +544,8 @@ def run_experiment(
         raise
     tracker.end_run("FINISHED")
     if artifacts is not None:
-        save_bundle(artifacts, spec=spec, manifest=_manifest("FINISHED"), model_state=model.state_dict())
+        save_bundle(artifacts, spec=spec, manifest=_manifest("FINISHED"), model_state=model.state_dict(),
+                    best_state=best_state)
         if not keep_checkpoint:  # after the FINISHED manifest landed: a crash in between only leaves it
             artifacts.delete(run_id, CHECKPOINT)
 
@@ -532,6 +553,15 @@ def run_experiment(
         experiment_id=experiment_id, run_id=run_id, device=str(dev), history=history,
         environment=environment, data_snapshot=data_snapshot, resumes=resumes,
     )
+
+
+def resumed_criterion(requested: BestCriterion | None, stored: BestCriterion | None) -> BestCriterion | None:
+    """A resume continues with the run's own keep-best criterion; asking for another is refused
+    (the best so far was chosen by the stored one, or not tracked at all)."""
+    if requested is not None and requested != stored:
+        started = f"--keep-best {stored}" if stored is not None else "no --keep-best"
+        raise RunnerError(f"this run was started with {started}; a resume cannot change it to {requested}")
+    return stored
 
 
 def _resume_point(store: ArtifactStore, run_id: str, experiment_id: str) -> Checkpoint:

@@ -6,7 +6,7 @@ concrete adapters (tracker, data provider, artifact store) and hands them to
     mlops run    experiment.yaml [--artifacts DIR] [--data-root DIR] [--tracker mlflow|inmemory]
                                  [--mlflow-uri URI] [--launcher local|ray] [--ray-address ADDR]
                                  [--device cpu] [--attempt N] [--checkpoint-every N] [--keep-checkpoint]
-                                 [--strict-env] [--json]
+                                 [--keep-best METRIC:min|max] [--strict-env] [--json]
     mlops resume RUN_ID --artifacts DIR [--data-root DIR] [--tracker mlflow|inmemory] [--mlflow-uri URI]
                                  [--device cpu] [--ray-address ADDR] [--checkpoint-every N] [--keep-checkpoint]
                                  [--json]
@@ -70,6 +70,7 @@ from mlops.application.report import render_report, write_report
 from mlops.application.reproduce import ReproduceError, ReproduceReport, reproduce_run
 from mlops.config import ConfigError, load_experiment_yaml
 from mlops.domain import ExperimentSpec, RunManifest, UnpinnedInputError, compute_experiment_id, compute_run_id
+from mlops.domain.best import BestCriterion
 from mlops.domain.environment import EnvCheck, record_environment
 from mlops.ports.artifacts import ArtifactError
 from mlops.ports.data import DataError, DataProvider
@@ -176,6 +177,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     if spec.unpinned_inputs():
         raise CliError("cannot run: unpinned inputs: " + ", ".join(spec.unpinned_inputs()))
     _check_checkpoint_args(args)
+    keep_best = _keep_best(args.keep_best)
     _discover(args.experiments)
     data = _data_provider(spec, args.data_root)
     tracker = _tracker(spec, args.tracker, args.mlflow_uri)
@@ -194,7 +196,14 @@ def cmd_run(args: argparse.Namespace) -> int:
     store = LocalArtifactStore(args.artifacts) if args.artifacts else None
     return _launch_and_report(spec, args, launcher, store, attempt=args.attempt, probe=probe, data=data,
                               tracker=tracker, checkpoint_every=args.checkpoint_every,
-                              keep_checkpoint=args.keep_checkpoint)
+                              keep_checkpoint=args.keep_checkpoint, keep_best=keep_best)
+
+
+def _keep_best(text: str | None) -> BestCriterion | None:
+    try:
+        return BestCriterion.parse(text) if text is not None else None
+    except ValueError as e:
+        raise CliError(str(e)) from None
 
 
 def _check_checkpoint_args(args: argparse.Namespace) -> None:
@@ -332,6 +341,7 @@ def cmd_rayjob(args: argparse.Namespace) -> int:
             ray_storage_pvc=args.ray_storage_pvc,
             ray_storage_path=args.ray_storage_path,
             resume=args.resume,
+            keep_best=str(_keep_best(args.keep_best)) if args.keep_best else None,
         )
     except (UnpinnedInputError, ValueError) as e:
         raise CliError(str(e)) from e
@@ -596,6 +606,9 @@ def build_parser() -> argparse.ArgumentParser:
                      help="store the training state as checkpoint.pt every N epochs (needs --artifacts); "
                           "makes the run resumable with `mlops resume`")
     _add_keep_checkpoint(run)
+    run.add_argument("--keep-best", metavar="METRIC:min|max",
+                     help="also keep the best epoch's weights as best.pt, e.g. val/dice/mean:max "
+                          "(not in any id; a resume continues with the same criterion)")
     run.add_argument("--strict-env", action="store_true",
                      help="refuse to run unless the code and image verifiably match code.commit / image_digest")
     run.add_argument("--experiments", default="experiments", help="package to discover components from")
@@ -635,6 +648,7 @@ def build_parser() -> argparse.ArgumentParser:
                     help="PersistentVolumeClaim for Ray Train's checkpoints, writable on every pod "
                          "(ReadWriteMany across nodes); passed as --ray-storage")
     rj.add_argument("--ray-storage-path", default="/ray-storage", help="mount path of that PVC inside the pods")
+    rj.add_argument("--keep-best", metavar="METRIC:min|max", help="passed to the in-cluster `mlops run`")
     rj.add_argument("--resume", action="store_true",
                     help="render a RayJob (<name>-resume-<generated>) that runs `mlops resume` for this spec + --attempt "
                          "from the checkpoints on the PVCs; pass the same PVCs and paths as the first job")

@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Protocol
 
 from mlops.application.runner import RunResult, run_experiment
+from mlops.domain.best import BestCriterion
 from mlops.domain.experiment import ExperimentSpec
 from mlops.ports.artifacts import ArtifactStore
 from mlops.ports.data import DataProvider
@@ -31,6 +32,7 @@ class Launcher(Protocol):
         checkpoint_every: int | None = None,
         resume: bool = False,
         keep_checkpoint: bool = False,
+        keep_best: BestCriterion | None = None,
     ) -> RunResult: ...
 
 
@@ -39,9 +41,10 @@ class LocalLauncher:
 
     def launch(
         self, spec, *, data, tracker, artifacts=None, attempt=1, device=None, probe=None,
-        checkpoint_every=None, resume=False, keep_checkpoint=False,
+        checkpoint_every=None, resume=False, keep_checkpoint=False, keep_best=None,
     ) -> RunResult:
         return run_experiment(
             spec, data=data, tracker=tracker, artifacts=artifacts, attempt=attempt, device=device, probe=probe,
             checkpoint_every=checkpoint_every, resume=resume, keep_checkpoint=keep_checkpoint,
+            keep_best=keep_best,
         )

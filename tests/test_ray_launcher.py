@@ -20,7 +20,8 @@ from mlops.adapters.synthetic_data import SyntheticBlobs  # noqa: E402
 from mlops.application import RunnerError, run_experiment  # noqa: E402
 from mlops.application.bundle import load_bundle  # noqa: E402
 from mlops.config import load_experiment_dict, load_experiment_yaml  # noqa: E402
-from mlops.domain import compute_run_id  # noqa: E402
+from mlops.domain import compute_experiment_id, compute_run_id  # noqa: E402
+from mlops.domain.best import BestCriterion, best_record  # noqa: E402
 from mlops.registry import discover  # noqa: E402
 
 CONFIGS = Path(__file__).parent.parent / "experiments/configs"
@@ -73,6 +74,18 @@ def test_one_ray_worker_reproduces_the_local_run(launcher):
     # OMP_NUM_THREADS=1, so CPU kernels sum in a different order than the local run.
     for k, v in a.model_state.items():
         assert torch.allclose(v, b.model_state[k], atol=1e-6, rtol=0), k
+
+
+def test_ray_keep_best_matches_the_local_run(launcher):
+    spec = _spec(workers=1, **{"training.epochs": 3})
+    crit = BestCriterion(metric="val/loss", mode="max")
+    local_store, ray_store = InMemoryArtifactStore(), InMemoryArtifactStore()
+    local = run_experiment(spec, data=_data(), tracker=InMemoryTracker(), artifacts=local_store, keep_best=crit)
+    result = launcher.launch(spec, data=_data(), tracker=InMemoryTracker(), artifacts=ray_store, keep_best=crit)
+    a, b = load_bundle(local_store, local.run_id), load_bundle(ray_store, result.run_id)
+    assert b.manifest.best == best_record(result.history, crit) == a.manifest.best
+    for k, v in a.best_state.items():
+        assert torch.allclose(v, b.best_state[k], atol=1e-6, rtol=0), k
 
 
 def test_two_cpu_workers_split_the_global_batch(launcher):
@@ -329,15 +342,16 @@ def test_ray_run_resumes_from_its_checkpoint_bit_exactly(tmp_path):
 
     spec = _resumable_spec()
     ref_store = InMemoryArtifactStore()
+    crit = BestCriterion(metric="val/loss", mode="max")  # best = an epoch before the interruption
     ref = RayLauncher(storage_path=tmp_path / "ref").launch(spec, data=_data(), tracker=InMemoryTracker(),
-                                                         artifacts=ref_store)
+                                                         artifacts=ref_store, keep_best=crit)
 
     launcher, store, tracker = RayLauncher(storage_path=tmp_path / "ray"), InMemoryArtifactStore(), InMemoryTracker()
     # 2 ranks x 2 samples per epoch: access 5 is the first item of epoch 3 on each rank
     data = FailOnceBlobs(after=4, marker=str(tmp_path / "preempted"))
     with pytest.raises(Exception):
         launcher.launch(spec, data=data, tracker=tracker, artifacts=store, checkpoint_every=1,
-                        probe=FixedProbe(commit_ok=True))
+                        probe=FixedProbe(commit_ok=True), keep_best=crit)
     failed = load_bundle(store, ref.run_id).manifest
     assert failed.status == "FAILED" and len(failed.history) == 2
     assert failed.environment is not None  # recorded at the start now, so a failure keeps it
@@ -350,6 +364,10 @@ def test_ray_run_resumes_from_its_checkpoint_bit_exactly(tmp_path):
     assert b.manifest.status == "FINISHED"
     for k, v in a.model_state.items():
         assert torch.equal(v, b.model_state[k]), k
+    # the criterion came back from launch.json, the best weights from Ray's checkpoint
+    assert b.manifest.best == a.manifest.best and b.manifest.best.epoch is not None
+    for k, v in a.best_state.items():
+        assert torch.equal(v, b.best_state[k]), k
     assert [r.epoch for r in b.manifest.resumes] == [2]
     assert b.manifest.environment.checks["code.commit"].status == "ok"  # first segment
     assert b.manifest.resumes[0].environment.checks["code.commit"].status == "mismatch"
@@ -387,6 +405,19 @@ def test_ray_keeps_only_the_latest_checkpoint(tmp_path):
         _spec(workers=1, **{"training.epochs": 3}), data=_data(), tracker=InMemoryTracker(),
         artifacts=InMemoryArtifactStore(), checkpoint_every=1, keep_checkpoint=True)
     assert len([p for p in _ray_run_dir(tmp_path / "ray", result.run_id).glob("checkpoint_*") if p.is_dir()]) == 1
+
+
+def test_ray_resume_with_another_keep_best_is_refused(tmp_path):
+    from mlops.application.bundle import LaunchRecord, save_launch
+
+    store, spec = InMemoryArtifactStore(), _spec(workers=1)
+    run_id = compute_run_id(compute_experiment_id(spec), spec.resources, 1)
+    save_launch(store, run_id, LaunchRecord(launcher="ray", attempt=1, checkpoint_every=1,
+                                            storage_path=str(tmp_path / "ray"), keep_best="val/loss:min"))
+    with pytest.raises(RunnerError, match="val/loss:min"):
+        RayLauncher(storage_path=tmp_path / "ray").launch(
+            spec, data=_data(), tracker=InMemoryTracker(), artifacts=store, resume=True,
+            keep_best=BestCriterion(metric="val/loss", mode="max"))
 
 
 def test_ray_resume_without_a_checkpoint_is_refused_before_starting(tmp_path):

@@ -3,6 +3,7 @@
     spec.json       the full ExperimentSpec (meta and tracking included, so it can be re-run as-is)
     manifest.json   RunManifest: ids, attempt, status, per-epoch history
     model.pt        final model ``state_dict`` (absent when the run FAILED)
+    best.pt         ``state_dict`` of the best epoch (``manifest.best``), only with keep-best, FINISHED only
     checkpoint.pt   latest mid-run training state, only with ``checkpoint_every`` on the local
                     launcher: what ``resume`` continues from. Not evidence; a replay never reads it.
     launch.json     how a checkpointing Ray run was launched (attempt, Ray storage path): the
@@ -22,6 +23,7 @@ from typing import Any
 
 import torch
 
+from mlops.domain.best import BestCriterion
 from mlops.domain.environment import EnvironmentRecord
 from mlops.domain.experiment import ExperimentSpec
 from mlops.domain.manifest import ResumePoint, RunManifest
@@ -30,6 +32,7 @@ from mlops.ports.artifacts import ArtifactStore
 SPEC = "spec.json"
 MANIFEST = "manifest.json"
 MODEL = "model.pt"
+BEST = "best.pt"
 CHECKPOINT = "checkpoint.pt"
 LAUNCH = "launch.json"
 _CHECKPOINT_FORMAT = 1
@@ -40,6 +43,7 @@ class Bundle:
     spec: ExperimentSpec
     manifest: RunManifest
     model_state: dict[str, Any] | None
+    best_state: dict[str, Any] | None = None
 
 
 def save_bundle(
@@ -48,25 +52,30 @@ def save_bundle(
     spec: ExperimentSpec,
     manifest: RunManifest,
     model_state: Mapping[str, Any] | None,
+    best_state: Mapping[str, Any] | None = None,
 ) -> None:
     run_id = manifest.run_id
     save_spec(store, run_id, spec)
+    # Weights before the manifest: a FINISHED manifest promises its files are there.
+    for name, state in ((MODEL, model_state), (BEST, best_state)):
+        if state is not None:
+            buf = io.BytesIO()
+            torch.save(dict(state), buf)
+            store.put(run_id, name, buf.getvalue())
     store.put(run_id, MANIFEST, manifest.model_dump_json(indent=2).encode())
-    if model_state is not None:
-        buf = io.BytesIO()
-        torch.save(dict(model_state), buf)
-        store.put(run_id, MODEL, buf.getvalue())
 
 
 def load_bundle(store: ArtifactStore, run_id: str) -> Bundle:
     spec = ExperimentSpec.model_validate_json(store.get(run_id, SPEC))
     manifest = RunManifest.model_validate_json(store.get(run_id, MANIFEST))
-    model_state = None
-    if MODEL in store.list(run_id):
-        model_state = torch.load(
-            io.BytesIO(store.get(run_id, MODEL)), map_location="cpu", weights_only=True
-        )
-    return Bundle(spec=spec, manifest=manifest, model_state=model_state)
+    names = store.list(run_id)
+
+    def weights(name: str) -> dict[str, Any] | None:
+        if name not in names:
+            return None
+        return torch.load(io.BytesIO(store.get(run_id, name)), map_location="cpu", weights_only=True)
+
+    return Bundle(spec=spec, manifest=manifest, model_state=weights(MODEL), best_state=weights(BEST))
 
 
 def save_spec(store: ArtifactStore, run_id: str, spec: ExperimentSpec) -> None:
@@ -87,6 +96,8 @@ class TrainState:
     # RNG states (torch / cuda / python / numpy / the train loader's generator): without them
     # a resumed run draws different shuffles and augmentations and is no longer the same run.
     rng: dict[str, Any]
+    # keep-best: weights of the best epoch so far (which epoch is derived from the history).
+    best_model_state: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -100,6 +111,7 @@ class Checkpoint:
     # manifest, so these ride along until the final one is written.
     environment: EnvironmentRecord | None = None
     resumes: list[ResumePoint] = field(default_factory=list)
+    keep_best: BestCriterion | None = None  # the run's criterion: a resume continues with it
 
     @property
     def epoch(self) -> int:
@@ -126,6 +138,8 @@ def save_checkpoint(store: ArtifactStore, ckpt: Checkpoint) -> None:
         "rng": st.rng,
         "environment": ckpt.environment.model_dump_json() if ckpt.environment is not None else None,
         "resumes": [r.model_dump_json() for r in ckpt.resumes],
+        "keep_best": str(ckpt.keep_best) if ckpt.keep_best is not None else None,
+        "best_model": dict(st.best_model_state) if st.best_model_state is not None else None,
     }
     buf = io.BytesIO()
     torch.save(payload, buf)
@@ -144,10 +158,12 @@ def load_checkpoint(store: ArtifactStore, run_id: str) -> Checkpoint:
         checkpoint_every=p["checkpoint_every"],
         state=TrainState(
             epoch=p["epoch"], history=p["history"], model_state=p["model"],
-            optimizer_state=p["optimizer"], rng=p["rng"],
+            optimizer_state=p["optimizer"], rng=p["rng"], best_model_state=p.get("best_model"),
         ),
         environment=EnvironmentRecord.model_validate_json(p["environment"]) if p["environment"] else None,
         resumes=[ResumePoint.model_validate_json(r) for r in p["resumes"]],
+        # .get: checkpoints written before keep-best existed have neither key
+        keep_best=BestCriterion.parse(p["keep_best"]) if p.get("keep_best") else None,
     )
 
 
@@ -160,6 +176,7 @@ class LaunchRecord:
     attempt: int
     checkpoint_every: int
     storage_path: str | None = None
+    keep_best: str | None = None  # BestCriterion as text; a resume continues with it
 
 
 def save_launch(store: ArtifactStore, run_id: str, launch: LaunchRecord) -> None:

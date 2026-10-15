@@ -6,6 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from mlops.domain.best import BestRecord
 from mlops.domain.environment import EnvCheck, EnvironmentRecord
 
 
@@ -39,3 +40,5 @@ class RunManifest(BaseModel):
     # Every time the run was resumed from a checkpoint, in order. Empty = ran in one go.
     # ``environment`` above describes the first segment.
     resumes: list[ResumePoint] = Field(default_factory=list)
+    # Run started with keep-best: which epoch best.pt holds (FINISHED only). None = not asked.
+    best: BestRecord | None = None
