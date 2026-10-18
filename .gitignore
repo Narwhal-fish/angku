@@ -11,3 +11,6 @@ report.md
 
 # Run outputs (`mlops run --artifacts artifacts`): bundles are evidence, not source
 artifacts/
+
+# kind cluster state (scripts/kind-up.sh): run bundles and Ray checkpoints of the local cluster
+.kind/

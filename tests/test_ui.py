@@ -6,6 +6,8 @@
 Keys: Enter drills down, Esc goes back (or clears the filter), / filters, Tab switches tabs, q quits.
 Phase C: a run that is still training (live ``progress.json``) shows as RUNNING with its epoch,
 latest metrics and, on the Run screen, the curves so far and the heartbeat age.
+Phase D: j opens the RayJobs screen (kubectl in a background thread, through injected callables):
+Enter shows a job, l its driver log, o the run's bundle when it is in this artifacts dir.
 Phase B (Runs / Run screens): space marks a run, d diffs the two marked runs, r reproduces and
 R resumes the run under the cursor after a confirmation, in a background worker. The browser itself
 only reads the store; it re-reads it every ``refresh`` seconds. The actions are injected
@@ -43,6 +45,8 @@ from mlops.ui.rows import (
     main_metric,
     metric_rows,
     overview_rows,
+    rayjob_detail_rows,
+    rayjob_row,
     resume_lines,
     run_columns,
     run_row,
@@ -123,6 +127,24 @@ def test_resume_lines():
                        resumes=[ResumePoint(epoch=2)])
     assert resume_lines("exp", result) == [
         "exp: FINISHED", f"  run_id         {'a' * 64}", "  resumed after epoch 2", "  epochs         3"]
+
+
+def _job(**kw):
+    from mlops.adapters.kuberay import RayJobStatus
+
+    base = dict(name="mlops-abc-a1", job_status="RUNNING", deployment_status="Running",
+                start_time="2026-10-13T10:00:00Z", run_id="a" * 64, experiment_id="e" * 64,
+                dashboard_url="head-svc:8265")
+    return RayJobStatus(**{**base, **kw})
+
+
+def test_rayjob_rows():
+    assert rayjob_row(_job(), in_store=True) == (
+        "mlops-abc-a1", "a" * 12, "RUNNING", "Running", "2026-10-13T10:00:00Z", "-", "here")
+    assert rayjob_row(_job(run_id=None, job_status="", deployment_status=""), in_store=False) == (
+        "mlops-abc-a1", "-", "-", "-", "2026-10-13T10:00:00Z", "-", "")
+    rows = dict(rayjob_detail_rows(_job(message="boom")))
+    assert rows["run_id"] == "a" * 64 and rows["message"] == "boom" and rows["dashboard"] == "head-svc:8265"
 
 
 def test_core_and_rows_never_import_textual():
@@ -626,3 +648,122 @@ def test_running_run_is_not_resumed(live):
 
     notes = _drive(art, steps, actions=fake.ui())
     assert fake.calls == [] and any("RUNNING" in n for n in notes)
+
+
+# --- phase D: RayJobs ---
+
+
+class FakeCluster:
+    def __init__(self, jobs, *, fail: str | None = None) -> None:
+        self.jobs, self.fail = jobs, fail
+        self.log_calls: list[str] = []
+
+    def rayjobs(self):
+        if self.fail:
+            from mlops.adapters.kuberay import KubeRayError
+
+            raise KubeRayError(self.fail)
+        return self.jobs
+
+    def logs(self, name: str) -> str:
+        self.log_calls.append(name)
+        return f"driver log of {name}\nepoch 1 val/loss=0.5\n"
+
+    def ui(self) -> UiActions:
+        fake = FakeActions()
+        return UiActions(reproduce=fake.reproduce, resume=fake.resume, rayjobs=self.rayjobs, rayjob_logs=self.logs)
+
+
+async def _to_rayjobs(app, pilot):
+    await pilot.press("j")
+    await _settle(app, pilot)
+
+
+def test_rayjobs_screen_lists_jobs_and_links_bundles(artifacts):
+    here = _finished_run_id(artifacts)
+    cluster = FakeCluster([_job(name="job-here", run_id=here), _job(name="job-elsewhere", run_id="b" * 64)])
+
+    async def steps(app, pilot):
+        from textual.widgets import DataTable
+
+        from mlops.ui.app import RayJobScreen, RayJobsScreen, RunScreen
+
+        await _to_rayjobs(app, pilot)
+        assert isinstance(app.screen, RayJobsScreen)
+        rows = {r[0]: r for r in _rows(app.screen.query_one(DataTable))}
+        assert rows["job-here"][-1] == "here" and rows["job-elsewhere"][-1] == ""
+        await pilot.press("enter")
+        assert isinstance(app.screen, RayJobScreen) and app.screen.job.name == "job-here"
+        assert dict(_rows(app.screen.query_one(DataTable)))["run_id"] == here
+        await pilot.press("o")
+        assert isinstance(app.screen, RunScreen) and app.screen.run_id == here
+        await pilot.press("escape", "escape", "down", "o")  # not in this artifacts dir
+        assert isinstance(app.screen, RayJobsScreen)
+
+    notes = _drive(artifacts, steps, actions=cluster.ui())
+    assert any("not in this artifacts dir" in n for n in notes)
+
+
+def test_rayjob_logs_screen(artifacts):
+    cluster = FakeCluster([_job()])
+
+    async def steps(app, pilot):
+        from mlops.ui.app import LogsScreen
+
+        await _to_rayjobs(app, pilot)
+        await pilot.press("l")
+        await _settle(app, pilot)
+        assert isinstance(app.screen, LogsScreen)
+        assert "driver log of mlops-abc-a1" in app.screen.text
+
+    _drive(artifacts, steps, actions=cluster.ui())
+    assert cluster.log_calls == ["mlops-abc-a1"]
+
+
+def test_kubectl_failure_is_shown_not_raised(artifacts):
+    async def steps(app, pilot):
+        from textual.widgets import DataTable, Static
+
+        from mlops.ui.app import RayJobsScreen
+
+        await _to_rayjobs(app, pilot)
+        assert isinstance(app.screen, RayJobsScreen)
+        assert app.screen.query_one(DataTable).row_count == 0
+        assert "connection refused" in str(app.screen.query_one("#error", Static).content)
+
+    notes = _drive(artifacts, steps, actions=FakeCluster([], fail="connection refused").ui())
+    assert any("connection refused" in n for n in notes)
+
+
+def test_rayjobs_not_available_without_the_callable(artifacts):
+    async def steps(app, pilot):
+        from mlops.ui.app import ExperimentsScreen
+
+        await pilot.press("j")
+        assert isinstance(app.screen, ExperimentsScreen)
+
+    notes = _drive(artifacts, steps, actions=FakeActions().ui())
+    assert any("not available" in n for n in notes)
+
+
+def test_cli_ui_rayjobs_go_through_kubectl(artifacts, monkeypatch):
+    calls = []
+
+    def fake_run(cmd, **kw):
+        calls.append(cmd)
+
+        class R:
+            returncode, stderr = 0, ""
+            stdout = json.dumps({"items": []}) if "get" in cmd else "log\n"
+
+        return R()
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    args = build_parser().parse_args(["ui", "--artifacts", str(artifacts), "--namespace", "ml",
+                                      "--kubectl", "kubectl --context lab"])
+    actions = _ui_actions(args, LocalArtifactStore(artifacts))
+    assert actions.rayjobs() == [] and actions.rayjob_logs("j1") == "log\n"
+    assert calls == [
+        ["kubectl", "--context", "lab", "get", "rayjob", "-n", "ml", "-l", "mlops.io/run", "-o", "json"],
+        ["kubectl", "--context", "lab", "logs", "-n", "ml", "job/j1", "--tail=200"],
+    ]

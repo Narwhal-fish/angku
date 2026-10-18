@@ -54,6 +54,13 @@ def test_gpu_torch_wheel_is_chosen_explicitly():
     assert re.search(r"^ARG TORCH_BACKEND=cu\d+$", DOCKERFILE, re.M)
 
 
+def test_cpu_base_is_selectable():
+    # kind on a laptop has no GPU: the CPU flavour of the same Ray release (and the CPU torch wheel).
+    assert re.search(r"^ARG RAY_FLAVOR=-gpu$", DOCKERFILE, re.M)
+    assert DOCKERFILE.index("ARG RAY_FLAVOR") < DOCKERFILE.index("\nFROM ")  # usable in FROM
+    assert "FROM rayproject/ray:${RAY_VERSION}-py312${RAY_FLAVOR}" in DOCKERFILE
+
+
 def test_all_extras_the_cluster_needs_are_installed():
     assert ".[tracking,distributed,medical]" in DOCKERFILE
 
@@ -61,7 +68,7 @@ def test_all_extras_the_cluster_needs_are_installed():
 def test_dockerignore_keeps_git_and_local_state_out():
     ignored = (ROOT / ".dockerignore").read_text().split()
     # no .git in the image: code is verified via MLOPS_GIT_COMMIT, not a repo that could drift
-    for entry in (".git", ".venv", "artifacts", "tests", "**/__pycache__"):
+    for entry in (".git", ".venv", "artifacts", ".kind", "tests", "**/__pycache__"):
         assert entry in ignored, entry
 
 
@@ -127,6 +134,15 @@ def test_clean_checkout_builds_with_the_commit_baked_in(repo, docker):
     assert "-t ghcr.io/x/train:0.2" in call and call.endswith(str(repo))  # context = repo root, any cwd
     assert f"code.commit: {_head(repo)}" in r.stdout
     assert "--push" in r.stdout  # explains that the digest only exists after a push
+    assert "RAY_FLAVOR" not in call and "TORCH_BACKEND" not in call  # the Dockerfile's GPU defaults
+
+
+def test_cpu_build_picks_the_cpu_base_and_wheel(repo, docker):
+    r = _build(repo, docker, "localhost:5001/train:kind", "--cpu", "--push")
+    assert r.returncode == 0, r.stderr
+    build, _, _ = _calls(docker)
+    assert "--build-arg RAY_FLAVOR= " in build and "--build-arg TORCH_BACKEND=cpu" in build
+    assert f"--build-arg MLOPS_GIT_COMMIT={_head(repo)}" in build
 
 
 @pytest.mark.parametrize("path", ["mlops/x.py", "pyproject.toml", "Dockerfile"])
@@ -161,7 +177,7 @@ def test_push_prints_the_values_to_pin(repo, docker):
     assert "image: ghcr.io/x/train:0.2" in r.stdout
 
 
-@pytest.mark.parametrize("args", [[], ["--push"], ["a", "b"]])
+@pytest.mark.parametrize("args", [[], ["--push"], ["--cpu"], ["a", "b"], ["a", "--gpu"]])
 def test_usage_errors(repo, docker, args):
     r = _build(repo, docker, *args)
     assert r.returncode == 2 and "usage" in r.stderr

@@ -314,18 +314,41 @@ def _parse_status(name: str, obj: dict[str, Any]) -> RayJobStatus:
     )
 
 
+def _get_rayjobs(selector: str, *, namespace: str, kubectl: Sequence[str], run: Runner) -> list[RayJobStatus]:
+    cmd = [*kubectl, "get", "rayjob", "-n", namespace, "-l", selector, "-o", "json"]
+    r = run(cmd, capture_output=True, text=True)
+    if r.returncode != 0:
+        raise KubeRayError(f"{' '.join(cmd)} failed ({r.returncode}): {r.stderr.strip()}")
+    return [_parse_status(obj["metadata"]["name"], obj) for obj in json.loads(r.stdout).get("items", [])]
+
+
+def list_rayjobs(
+    *, namespace: str = "default", kubectl: Sequence[str] = ("kubectl",), run: Runner = subprocess.run
+) -> list[RayJobStatus]:
+    """Every RayJob in ``namespace`` that we rendered (it carries the ``mlops.io/run`` label)."""
+    return _get_rayjobs(RUN_LABEL, namespace=namespace, kubectl=kubectl, run=run)
+
+
 def active_rayjobs(
     run_id: str, *, namespace: str = "default", kubectl: Sequence[str] = ("kubectl",), run: Runner = subprocess.run
 ) -> list[RayJobStatus]:
     """RayJobs of this run (by ``mlops.io/run`` label) that have not finished: pending, running,
     or just created with no status yet. Two of them would write the same Ray checkpoints.
     Jobs rendered before the label existed are not found."""
-    cmd = [*kubectl, "get", "rayjob", "-n", namespace, "-l", f"{RUN_LABEL}={run_label(run_id)}", "-o", "json"]
+    jobs = _get_rayjobs(f"{RUN_LABEL}={run_label(run_id)}", namespace=namespace, kubectl=kubectl, run=run)
+    return [j for j in jobs if not j.finished]
+
+
+def rayjob_logs(
+    name: str, *, namespace: str = "default", tail: int = 200, kubectl: Sequence[str] = ("kubectl",),
+    run: Runner = subprocess.run,
+) -> str:
+    """The last ``tail`` lines of the driver log, captured (``follow_rayjob_logs`` streams instead)."""
+    cmd = [*kubectl, "logs", "-n", namespace, f"job/{name}", f"--tail={tail}"]
     r = run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
         raise KubeRayError(f"{' '.join(cmd)} failed ({r.returncode}): {r.stderr.strip()}")
-    jobs = [_parse_status(obj["metadata"]["name"], obj) for obj in json.loads(r.stdout).get("items", [])]
-    return [j for j in jobs if not j.finished]
+    return r.stdout
 
 
 def follow_rayjob_logs(

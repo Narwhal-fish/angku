@@ -428,3 +428,35 @@ def test_active_rayjobs_reports_kubectl_failure():
 
     with pytest.raises(KubeRayError, match="forbidden"):
         active_rayjobs("r" * 64, run=_FakeGet(returncode=1, stderr="Error from server (Forbidden): forbidden"))
+
+
+# --- for `mlops ui` (roadmap 13 phase D) ---
+
+
+def test_list_rayjobs_finds_every_job_we_rendered():
+    from mlops.adapters.kuberay import list_rayjobs
+
+    listing = json.dumps({"kind": "List", "items": [
+        json.loads(_rayjob_json(job_status="SUCCEEDED", deployment="Complete")) | {"metadata": {"name": "mlops-a-a1"}},
+        json.loads(_rayjob_json(job_status="RUNNING")) | {"metadata": {"name": "mlops-b-a1"}},
+    ]})
+    kubectl = _FakeGet(listing)
+    jobs = list_rayjobs(namespace="ml", kubectl=["kubectl", "--context", "x"], run=kubectl)
+    assert [(j.name, j.job_status, j.finished) for j in jobs] == [
+        ("mlops-a-a1", "SUCCEEDED", True), ("mlops-b-a1", "RUNNING", False)]
+    ((cmd, _),) = kubectl.calls
+    assert cmd == ["kubectl", "--context", "x", "get", "rayjob", "-n", "ml", "-l", "mlops.io/run", "-o", "json"]
+    with pytest.raises(KubeRayError, match="forbidden"):
+        list_rayjobs(run=_FakeGet(returncode=1, stderr="forbidden"))
+
+
+def test_rayjob_logs_are_captured_tail():
+    from mlops.adapters.kuberay import rayjob_logs
+
+    kubectl = _FakeGet("epoch 1\nepoch 2\n")
+    assert rayjob_logs("mlops-a-a1", namespace="ml", tail=50, run=kubectl) == "epoch 1\nepoch 2\n"
+    ((cmd, kw),) = kubectl.calls
+    assert cmd == ["kubectl", "logs", "-n", "ml", "job/mlops-a-a1", "--tail=50"]
+    assert kw["capture_output"] is True
+    with pytest.raises(KubeRayError, match="NotFound"):
+        rayjob_logs("x", run=_FakeGet(returncode=1, stderr="Error from server (NotFound)"))

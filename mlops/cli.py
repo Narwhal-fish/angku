@@ -23,7 +23,7 @@ concrete adapters (tracker, data provider, artifact store) and hands them to
     mlops snapshot experiment.yaml [--data-root DIR]
     mlops ui     --artifacts DIR [--experiment ID_PREFIX] [--refresh SECONDS] [--data-root DIR]
                                  [--tracker mlflow|inmemory] [--mlflow-uri URI] [--device cpu]
-                                 [--ray-address ADDR] [--atol X]
+                                 [--ray-address ADDR] [--atol X] [--namespace NS] [--kubectl CMD]
 
 Exit codes: 0 ok, 1 training failed / bundle not reproduced / diff: different experiments,
 2 bad input (yaml, pins, wiring).
@@ -54,8 +54,11 @@ from mlops.adapters.inmemory_artifacts import InMemoryArtifactStore
 from mlops.adapters.inmemory_tracker import InMemoryTracker
 from mlops.adapters.kuberay import (
     KubeRayError,
+    RayJobStatus,
     active_rayjobs,
     follow_rayjob_logs,
+    list_rayjobs,
+    rayjob_logs,
     rayjob_status,
     render_rayjob,
     submit_rayjob,
@@ -582,7 +585,19 @@ def _ui_actions(args: argparse.Namespace, store: LocalArtifactStore) -> UiAction
             except ArtifactError:
                 pass
 
-    return UiActions(reproduce=reproduce, resume=resume)
+    def rayjobs() -> list[RayJobStatus]:
+        try:
+            return list_rayjobs(namespace=args.namespace, kubectl=shlex.split(args.kubectl), run=subprocess.run)
+        except OSError as e:  # no kubectl on this machine
+            raise KubeRayError(f"cannot run {args.kubectl!r}: {e}") from e
+
+    def logs(name: str) -> str:
+        try:
+            return rayjob_logs(name, namespace=args.namespace, kubectl=shlex.split(args.kubectl), run=subprocess.run)
+        except OSError as e:
+            raise KubeRayError(f"cannot run {args.kubectl!r}: {e}") from e
+
+    return UiActions(reproduce=reproduce, resume=resume, rayjobs=rayjobs, rayjob_logs=logs)
 
 
 def cmd_snapshot(args: argparse.Namespace) -> int:
@@ -761,6 +776,8 @@ def build_parser() -> argparse.ArgumentParser:
     ui.add_argument("--atol", type=float, default=0.0, metavar="X",
                     help="diff/reproduce tolerance (default 0: exact)")
     ui.add_argument("--experiments", default="experiments", help="package to discover components from")
+    ui.add_argument("--namespace", default="default", help="RayJobs screen (j): namespace to list")
+    ui.add_argument("--kubectl", default="kubectl", help='RayJobs screen: kubectl command, e.g. "kubectl --context X"')
     ui.set_defaults(func=cmd_ui)
     return p
 

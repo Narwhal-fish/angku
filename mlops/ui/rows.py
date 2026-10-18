@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import math
 
+from mlops.adapters.kuberay import RayJobStatus
 from mlops.application.listing import ExperimentGroup, RunSummary
 from mlops.application.report import (
     actual_rows,
@@ -139,3 +140,26 @@ def resume_lines(name: str, result: RunResult) -> list[str]:
     if result.resumes:
         out.append(f"  resumed after epoch {result.resumes[-1].epoch}")
     return [*out, f"  epochs         {len(result.history)}"]
+
+
+RAYJOB_COLUMNS = ("NAME", "RUN", "JOB", "DEPLOYMENT", "STARTED", "ENDED", "BUNDLE")
+
+
+def rayjob_row(j: RayJobStatus, *, in_store: bool) -> tuple[str, ...]:
+    """BUNDLE = "here" when the job's run is in this artifacts dir (o opens it)."""
+    return (j.name, j.run_id[:12] if j.run_id else "-", j.job_status or "-", j.deployment_status or "-",
+            j.start_time or "-", j.end_time or "-", "here" if in_store else "")
+
+
+def rayjob_detail_rows(j: RayJobStatus) -> list[tuple[str, str]]:
+    return [
+        ("name", j.name),
+        ("job status", j.job_status or "no status yet"),
+        ("deployment", j.deployment_status or "-"),
+        ("message", j.message or "-"),
+        ("dashboard", j.dashboard_url or "-"),
+        ("started", j.start_time or "-"),
+        ("ended", j.end_time or "-"),
+        ("run_id", j.run_id or "-"),
+        ("experiment_id", j.experiment_id or "-"),
+    ]

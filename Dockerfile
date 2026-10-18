@@ -5,9 +5,11 @@
 # (there is no .git in the image). Pin the pushed digest as environment.image_digest.
 #
 # RAY_VERSION must equal mlops.adapters.kuberay.RAY_VERSION (tests/test_image.py checks it).
-# TORCH_BACKEND must match the CUDA of the base image.
+# TORCH_BACKEND must match the CUDA of the base image. `build-image.sh --cpu` sets RAY_FLAVOR=""
+# and TORCH_BACKEND=cpu: the same Ray release without CUDA, for kind on a machine with no GPU.
 ARG RAY_VERSION=2.58.0
-FROM rayproject/ray:${RAY_VERSION}-py312-gpu
+ARG RAY_FLAVOR=-gpu
+FROM rayproject/ray:${RAY_VERSION}-py312${RAY_FLAVOR}
 
 ARG RAY_VERSION
 ARG TORCH_BACKEND=cu128

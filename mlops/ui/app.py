@@ -5,6 +5,10 @@ Esc goes back (or clears the filter first), / filters the list, Tab cycles the r
 Browsing is read-only: it goes through ``application.listing`` / ``report`` and every screen
 re-reads the store every ``refresh`` seconds, redrawing only what changed.
 
+RayJobs (j on the Experiments screen): our RayJobs in the namespace via kubectl, fetched in a
+thread worker and re-fetched every max(refresh, 5) s; Enter shows one, l its driver log, o opens its
+run when the bundle is in this artifacts dir. kubectl errors are shown, never raised.
+
 Actions (Runs and Run screens): space marks a run, d diffs the two marked ones, r reproduces and
 R resumes the run under the cursor. r and R ask first, then run ``UiActions`` (injected by the
 CLI) in a thread worker, one at a time; the result opens in a dialog, a failure is a notification.
@@ -23,6 +27,7 @@ from textual.screen import ModalScreen, Screen
 from textual.widgets import Button, DataTable, Footer, Header, Input, Label, Markdown, Static, TabbedContent, TabPane
 from textual.worker import Worker, WorkerState
 
+from mlops.adapters.kuberay import RayJobStatus
 from mlops.application.bundle import MANIFEST, SPEC, load_bundle
 from mlops.application.diff import diff_lines, diff_runs
 from mlops.application.listing import RunSummary, group_by_experiment, list_runs
@@ -38,18 +43,27 @@ from mlops.ui.rows import (
     CHECK_COLUMNS,
     EXPERIMENT_COLUMNS,
     METRIC_COLUMNS,
+    RAYJOB_COLUMNS,
     environment_rows,
     experiment_row,
     history_rows,
     main_metric,
     metric_rows,
     overview_rows,
+    rayjob_detail_rows,
+    rayjob_row,
     resume_lines,
     run_columns,
     run_row,
 )
 
 Rows = list[tuple[str, tuple[str, ...]]]  # (row key, cells)
+
+
+def _last_line(error: BaseException | None) -> str:
+    """kubectl's stderr repeats its retries; the last line says what went wrong."""
+    lines = [line for line in str(error).splitlines() if line.strip()]
+    return lines[-1] if lines else repr(error)
 
 
 def _fill(table: DataTable[Any], columns: tuple[str, ...], rows: list[tuple[str, ...]]) -> None:
@@ -138,6 +152,11 @@ class TableScreen(Screen[None]):
 
 
 class ExperimentsScreen(TableScreen):
+    BINDINGS = [Binding("j", "rayjobs", "RayJobs")]
+
+    def action_rayjobs(self) -> None:
+        self.app.open_rayjobs()
+
     def on_mount(self) -> None:
         self.sub_title = f"Experiments  ({self.app.label})"
         super().on_mount()
@@ -317,6 +336,142 @@ class RunScreen(Screen[None]):
         self.app.request("resume", self.run_id)
 
 
+class RayJobsScreen(Screen[None]):
+    BINDINGS = [Binding("escape", "back", "Back"), Binding("l", "logs", "Logs"), Binding("o", "open_run", "Open run")]
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.jobs: dict[str, RayJobStatus] = {}
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield Static(id="error", markup=False)
+        yield DataTable(cursor_type="row")
+        yield Footer()
+
+    def on_mount(self) -> None:
+        self.sub_title = "RayJobs"
+        self.fetch()
+        self.set_interval(max(self.app.refresh_every, 5.0), self.fetch)
+        self.query_one(DataTable).focus()
+
+    def fetch(self) -> None:
+        assert self.app.actions is not None and self.app.actions.rayjobs is not None
+        self.run_worker(self.app.actions.rayjobs, group="rayjobs", thread=True, exclusive=True, exit_on_error=False)
+
+    def on_worker_state_changed(self, event: Worker.StateChanged) -> None:
+        if event.worker.group != "rayjobs":
+            return
+        error = self.query_one("#error", Static)
+        if event.state == WorkerState.SUCCESS:
+            error.update("")
+            self._show(event.worker.result)
+        elif event.state == WorkerState.ERROR:
+            error.update(f"kubectl failed: {_last_line(event.worker.error)}")
+            self.notify(f"kubectl failed: {_last_line(event.worker.error)}", severity="error")
+
+    def _show(self, jobs: list[RayJobStatus]) -> None:
+        self.jobs = {j.name: j for j in jobs}
+        here = {r.run_id for r in self.app.runs()}
+        table = self.query_one(DataTable)
+        current = self.cursor_job()
+        table.clear(columns=True)
+        table.add_columns(*RAYJOB_COLUMNS)
+        for j in jobs:
+            table.add_row(*rayjob_row(j, in_store=j.run_id in here), key=j.name)
+        if current in self.jobs:
+            table.move_cursor(row=table.get_row_index(current))
+
+    def cursor_job(self) -> str | None:
+        table = self.query_one(DataTable)
+        if not table.row_count:
+            return None
+        return table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value
+
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        if event.row_key.value in self.jobs:
+            self.app.push_screen(RayJobScreen(self.jobs[event.row_key.value]))
+
+    def action_logs(self) -> None:
+        if (name := self.cursor_job()) is not None:
+            self.app.open_logs(name)
+
+    def action_open_run(self) -> None:
+        if (name := self.cursor_job()) is not None:
+            self.app.open_run(self.jobs[name].run_id)
+
+    def action_back(self) -> None:
+        self.app.pop_screen()
+
+
+class RayJobScreen(Screen[None]):
+    BINDINGS = [Binding("escape", "back", "Back"), Binding("l", "logs", "Logs"), Binding("o", "open_run", "Open run")]
+
+    def __init__(self, job: RayJobStatus) -> None:
+        super().__init__()
+        self.job = job
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield DataTable(cursor_type="row")
+        yield Footer()
+
+    def on_mount(self) -> None:
+        self.sub_title = f"RayJob {self.job.name}"
+        _fill(self.query_one(DataTable), ("FIELD", "VALUE"), rayjob_detail_rows(self.job))
+
+    def action_logs(self) -> None:
+        self.app.open_logs(self.job.name)
+
+    def action_open_run(self) -> None:
+        self.app.open_run(self.job.run_id)
+
+    def action_back(self) -> None:
+        self.app.pop_screen()
+
+
+class LogsScreen(Screen[None]):
+    """The tail of a RayJob's driver log, re-fetched every max(refresh, 5) s."""
+
+    BINDINGS = [Binding("escape", "back", "Back")]
+
+    def __init__(self, name: str) -> None:
+        super().__init__()
+        self.job_name = name
+        self.text = ""
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        with VerticalScroll():
+            yield Static(id="log", markup=False)
+        yield Footer()
+
+    def on_mount(self) -> None:
+        self.sub_title = f"Logs {self.job_name}"
+        self.fetch()
+        self.set_interval(max(self.app.refresh_every, 5.0), self.fetch)
+
+    def fetch(self) -> None:
+        assert self.app.actions is not None and self.app.actions.rayjob_logs is not None
+        self.run_worker(partial(self.app.actions.rayjob_logs, self.job_name), group="logs", thread=True,
+                        exclusive=True, exit_on_error=False)
+
+    def on_worker_state_changed(self, event: Worker.StateChanged) -> None:
+        if event.worker.group != "logs":
+            return
+        if event.state == WorkerState.SUCCESS:
+            self.text = event.worker.result
+        elif event.state == WorkerState.ERROR:
+            self.text = f"kubectl failed: {_last_line(event.worker.error)}"
+        else:
+            return
+        self.query_one("#log", Static).update(self.text)
+        self.query_one(VerticalScroll).scroll_end(animate=False)
+
+    def action_back(self) -> None:
+        self.app.pop_screen()
+
+
 class DiffScreen(Screen[None]):
     """What `mlops diff` prints for the two runs."""
 
@@ -425,6 +580,26 @@ class MlopsApp(App[None]):
             self.action_hide_help_panel()
         else:
             self.action_show_help_panel()
+
+    # -- navigation shared by screens ---------------------------------------------
+
+    def open_rayjobs(self) -> None:
+        if self.actions is None or self.actions.rayjobs is None:
+            self.notify("RayJobs are not available here.", severity="warning")
+            return
+        self.push_screen(RayJobsScreen())
+
+    def open_logs(self, name: str) -> None:
+        if self.actions is None or self.actions.rayjob_logs is None:
+            self.notify("RayJob logs are not available here.", severity="warning")
+            return
+        self.push_screen(LogsScreen(name))
+
+    def open_run(self, run_id: str | None) -> None:
+        if run_id is None or run_id not in {r.run_id for r in self.runs()}:
+            self.notify(f"run {(run_id or '?')[:12]} is not in this artifacts dir.", severity="warning")
+            return
+        self.push_screen(RunScreen(run_id))
 
     # -- actions ----------------------------------------------------------------
 
