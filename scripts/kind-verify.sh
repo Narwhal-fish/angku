@@ -56,10 +56,11 @@ try: print(json.load(open(sys.argv[1]))["epoch"])
 except (OSError, ValueError, KeyError): print(0)' "$ART/$1/progress.json"
 }
 
-status_of() {  # RUN_ID -> status as `mlops list` sees it
+status_of() {  # RUN_ID -> "STATUS resumable|-" as `mlops list` sees it
     mlops list --artifacts "$ART" --json | "$PY" -c 'import json,sys
-runs = [r for g in json.load(sys.stdin) for r in g["runs"]]
-print(next((r["status"] for r in runs if r["run_id"] == sys.argv[1]), "ABSENT"))' "$1"
+runs = {r["run_id"]: r for g in json.load(sys.stdin) for r in g["runs"]}
+r = runs.get(sys.argv[1])
+print(r["status"] + (" resumable" if r["resumable"] else " -") if r else "ABSENT -")' "$1"
 }
 
 run_id() {  # ATTEMPT -> run_id of $SPEC
@@ -98,6 +99,10 @@ yaml.safe_dump(d, open(out, "w"), sort_keys=False)
 EOF
 RUN_A="$(run_id 1)"; RUN_B="$(run_id 2)"
 echo "run A $RUN_A"; echo "run B $RUN_B"
+# A rerun starts clean: this script's own earlier bundles and Ray checkpoints of these two runs.
+for run in "$RUN_A" "$RUN_B"; do
+    rm -rf "${ART:?}/$run" ".kind/ray-storage/mlops-${run:0:12}-a"*
+done
 
 step "run A: submit, kill at epoch $KILL_AT_EPOCH"
 JOB_A="$(mlops rayjob "$SPEC" --attempt 1 "${PVCS[@]}" --checkpoint-every 2 --submit --kubectl "$KUBECTL" | submitted)"
@@ -111,12 +116,16 @@ echo "epoch $(epoch_of "$RUN_A") reached; deleting $JOB_A"
 $KUBECTL delete rayjob "$JOB_A" --wait=true
 KILLED_AT="$(epoch_of "$RUN_A")"
 
-step "run A: wait for INTERRUPTED (heartbeat goes stale after 60 s)"
+# Deleting a RayJob stops the driver gracefully: it writes a FAILED bundle (resumable). A hard kill
+# leaves no manifest: INTERRUPTED once the heartbeat is stale (60 s). Either way: resumable.
+step "run A: wait until it is resumable"
 deadline=$((SECONDS + 300))
-until [ "$(status_of "$RUN_A")" = INTERRUPTED ]; do
-    [ $SECONDS -lt $deadline ] || { echo "run A did not become INTERRUPTED: $(status_of "$RUN_A")" >&2; exit 1; }
+until [[ "$(status_of "$RUN_A")" =~ ^(FAILED|INTERRUPTED)\ resumable$ ]]; do
+    [ $SECONDS -lt $deadline ] || { echo "run A did not become resumable: $(status_of "$RUN_A")" >&2; exit 1; }
     sleep 5
 done
+STOPPED_AS="$(status_of "$RUN_A")"
+echo "run A: $STOPPED_AS"
 
 step "run A: rayjob --resume"
 JOB_A2="$(mlops rayjob "$SPEC" --attempt 1 "${PVCS[@]}" --resume --submit --kubectl "$KUBECTL" | submitted)"
