@@ -12,6 +12,7 @@ CLI) in a thread worker, one at a time; the result opens in a dialog, a failure 
 
 from __future__ import annotations
 
+import time
 from functools import partial
 from typing import Any
 
@@ -25,6 +26,7 @@ from textual.worker import Worker, WorkerState
 from mlops.application.bundle import MANIFEST, SPEC, load_bundle
 from mlops.application.diff import diff_lines, diff_runs
 from mlops.application.listing import RunSummary, group_by_experiment, list_runs
+from mlops.application.progress import PROGRESS, read_progress
 from mlops.application.report import REPORT, render_report
 from mlops.application.reproduce import ReproduceReport, reproduce_lines
 from mlops.domain.experiment import ExperimentSpec
@@ -249,11 +251,15 @@ class RunScreen(Screen[None]):
 
     def load(self) -> None:
         store: ArtifactStore = self.app.store
-        files = sorted(store.list(self.run_id))
+        try:
+            files = sorted(store.list(self.run_id))
+        except ArtifactError:
+            files = []
         manifest_bytes = store.get(self.run_id, MANIFEST) if MANIFEST in files else None
-        if (files, manifest_bytes) == self._loaded:
+        progress = read_progress(store, self.run_id) if PROGRESS in files and manifest_bytes is None else None
+        if (files, manifest_bytes, progress) == self._loaded:
             return
-        self._loaded = (files, manifest_bytes)
+        self._loaded = (files, manifest_bytes, progress)
         summary = next((r for r in self.app.runs() if r.run_id == self.run_id), None)
         if summary is None:  # gone, or not a run (no spec.json)
             _fill(self.query_one("#overview", DataTable), ("FIELD", "VALUE"),
@@ -264,8 +270,13 @@ class RunScreen(Screen[None]):
             spec = ExperimentSpec.model_validate_json(store.get(self.run_id, SPEC))
             manifest = RunManifest.model_validate_json(manifest_bytes) if manifest_bytes else None
         _fill(self.query_one("#overview", DataTable), ("FIELD", "VALUE"),
-              overview_rows(summary, spec=spec, manifest=manifest))
-        history = manifest.history if manifest is not None else []
+              overview_rows(summary, spec=spec, manifest=manifest, now=time.time()))
+        if manifest is not None:
+            history = manifest.history
+        elif summary.status == "RUNNING" and progress is not None:
+            history = progress.history  # this process's epochs so far (a resume starts empty)
+        else:
+            history = []
         _fill(self.query_one("#metrics", DataTable), METRIC_COLUMNS, metric_rows(history))
         _fill(self.query_one("#history", DataTable), *history_rows(history))
         checks, actual = environment_rows(manifest)
@@ -282,6 +293,8 @@ class RunScreen(Screen[None]):
                 return render_report(load_bundle(store, self.run_id))
             except ArtifactError as e:
                 return f"Could not render the report: {e}"
+        if summary.status == "RUNNING":
+            return "The run is still running; its report is written when it ends."
         return f"No manifest yet, so no report ({summary.status})."
 
     def _step(self, by: int) -> None:

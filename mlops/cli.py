@@ -45,6 +45,7 @@ import os
 import shlex
 import subprocess
 import sys
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -60,6 +61,7 @@ from mlops.adapters.kuberay import (
     submit_rayjob,
 )
 from mlops.adapters.local_artifacts import LocalArtifactStore
+from mlops.adapters.live_progress import LiveProgress
 from mlops.adapters.local_environment import LocalEnvironmentProbe
 from mlops.adapters.synthetic_data import SyntheticBlobs
 from mlops.application import RunnerError
@@ -68,6 +70,7 @@ from mlops.application.launch import Launcher, LocalLauncher
 from mlops.application.runner import RunResult, verify_data
 from mlops.application.diff import RunDiff, diff_lines, diff_runs, format_value
 from mlops.application.listing import ExperimentGroup, group_by_experiment, list_runs
+from mlops.application.progress import PROGRESS, is_live, read_progress
 from mlops.application.report import render_report, write_report
 from mlops.application.reproduce import ReproduceError, ReproduceReport, reproduce_lines, reproduce_run
 from mlops.config import ConfigError, load_experiment_yaml
@@ -220,20 +223,26 @@ def _launch_and_report(
     spec: ExperimentSpec, args: argparse.Namespace, launcher: Launcher, store: LocalArtifactStore | None,
     *, attempt: int, **launch: Any,
 ) -> int:
-    """Launch, write report.md, warn about unverified pins, print the summary. Shared by run/resume."""
+    """Launch, write report.md, warn about unverified pins, print the summary. Shared by run/resume.
+    With a store the run keeps progress.json current while it trains (``mlops ui`` shows it live)."""
+    run_id = compute_run_id(compute_experiment_id(spec), spec.resources, attempt)
+    if store is not None:
+        launch["tracker"] = LiveProgress(launch["tracker"], store)
     try:
         result = launcher.launch(spec, artifacts=store, attempt=attempt, device=args.device, **launch)
     except (TrackerError, DataError, RegistryError, RunnerError) as e:
         raise CliError(str(e)) from e
     except Exception as e:  # training itself blew up; the FAILED bundle (if any) is already written
         if store is not None:
-            run_id = compute_run_id(compute_experiment_id(spec), spec.resources, attempt)
             try:
                 write_report(store, run_id)
             except ArtifactError:  # failed before the run started: no bundle to report on
                 pass
         print(f"run FAILED: {type(e).__name__}: {e}", file=sys.stderr)
         return 1
+    finally:
+        if store is not None:
+            store.delete(run_id, PROGRESS)
     if store is not None:
         write_report(store, result.run_id)
     # Warn about where *this* process ran: after a resume that is the latest segment.
@@ -289,6 +298,11 @@ def _resume_target(store: LocalArtifactStore, run_id: str, *, ray_address: str |
         finished = False
     if finished:  # checked first: a finished run has usually dropped its checkpoint
         raise CliError(f"run {run_id} already FINISHED; nothing to resume")
+    progress = read_progress(store, run_id)
+    now = time.time()
+    if progress is not None and is_live(progress, now=now):
+        raise CliError(f"run {run_id} is RUNNING (heartbeat {now - progress.updated:.0f}s ago): "
+                       "resuming it now would race the live process")
     if LAUNCH in store.list(run_id):
         # A Ray run: its checkpoints live in Ray storage; resume through Ray with the same storage.
         launch = load_launch(store, run_id)
@@ -556,11 +570,13 @@ def _ui_actions(args: argparse.Namespace, store: LocalArtifactStore) -> UiAction
         spec, launcher, attempt, _ = _resume_target(store, run_id, ray_address=args.ray_address,
                                                     experiments=args.experiments)
         _discover(args.experiments)
+        tracker = LiveProgress(_tracker(spec, args.tracker, args.mlflow_uri), store)
         try:
-            return launcher.launch(spec, data=_data_provider(spec, args.data_root),
-                                   tracker=_tracker(spec, args.tracker, args.mlflow_uri), artifacts=store,
-                                   attempt=attempt, device=args.device, probe=_probe(), resume=True)
+            return launcher.launch(spec, data=_data_provider(spec, args.data_root), tracker=tracker,
+                                   artifacts=store, attempt=attempt, device=args.device, probe=_probe(),
+                                   resume=True)
         finally:  # FINISHED or FAILED: the bundle's report.md follows it, as after `mlops resume`
+            store.delete(run_id, PROGRESS)
             try:
                 write_report(store, run_id)
             except ArtifactError:

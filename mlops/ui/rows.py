@@ -67,8 +67,9 @@ def run_row(r: RunSummary, metric: str | None) -> tuple[str, ...]:
     return (r.run_id[:12], attempt, r.status, epochs, *value, "; ".join(notes))
 
 
-def overview_rows(s: RunSummary, *, spec: ExperimentSpec | None,
-                  manifest: RunManifest | None) -> list[tuple[str, str]]:
+def overview_rows(s: RunSummary, *, spec: ExperimentSpec | None, manifest: RunManifest | None,
+                  now: float | None = None) -> list[tuple[str, str]]:
+    """``now`` (unix seconds) ages a RUNNING run's heartbeat."""
     rows = [("name", s.name)]
     if spec is not None and spec.meta.description:
         rows.append(("description", spec.meta.description))
@@ -81,6 +82,9 @@ def overview_rows(s: RunSummary, *, spec: ExperimentSpec | None,
         ("workers", str(s.workers) if s.workers is not None else "?"),
         ("device", manifest.device if manifest is not None else "—"),
     ]
+    if s.status == "RUNNING" and s.updated is not None and now is not None:
+        rows.append(("progress", f"epoch {s.epochs_done} / {s.epochs_total or '?'}, "
+                                 f"heartbeat {max(0, now - s.updated):.0f}s ago"))
     if s.resumes and manifest is not None:
         rows.append(("resumed", ", ".join(f"after epoch {p.epoch}" for p in manifest.resumes)))
     if s.resumable:
@@ -89,10 +93,11 @@ def overview_rows(s: RunSummary, *, spec: ExperimentSpec | None,
         b = s.best
         rows.append(("best", f"{b.metric} ({b.mode}) never defined" if b.epoch is None
                      else f"{b.metric} ({b.mode}) = {format_number(b.value)} at epoch {b.epoch}"))
-    rows += [
-        ("environment", record_verdict(manifest.environment) if manifest is not None else "no manifest"),
-        ("data", data_verdict(manifest) if manifest is not None else "no manifest"),
-    ]
+    if manifest is not None:
+        rows += [("environment", record_verdict(manifest.environment)), ("data", data_verdict(manifest))]
+    else:
+        missing = "recorded when the run ends" if s.status == "RUNNING" else "no manifest"
+        rows += [("environment", missing), ("data", missing)]
     if s.error:
         rows.append(("error", s.error))
     return rows

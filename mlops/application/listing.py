@@ -6,7 +6,8 @@ ids exist for: did every FINISHED attempt of this ExperimentID end with the same
 metrics? Exactly by default; ``atol`` > 0 accepts runs whose final metrics are within ``atol``
 of each other (max - min), for runs from different launchers. NaN agrees only with NaN.
 
-Statuses: FINISHED / FAILED (from the manifest), INTERRUPTED (no manifest but a
+Statuses: FINISHED / FAILED (from the manifest), RUNNING (no manifest, a live ``progress.json``:
+see ``application.progress``; never resumable), INTERRUPTED (no manifest but a
 checkpoint.pt or a Ray launch.json: killed, resumable), INCOMPLETE (no manifest, no checkpoint), UNREADABLE
 (spec or manifest does not parse; ``error`` says why). Directories without ``spec.json``
 are not runs and are skipped.
@@ -15,12 +16,14 @@ are not runs and are skipped.
 from __future__ import annotations
 
 import math
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
 from pydantic import ValidationError
 
 from mlops.application.bundle import CHECKPOINT, LAUNCH, MANIFEST, SPEC
+from mlops.application.progress import PROGRESS, is_live, read_progress
 from mlops.domain.best import BestRecord
 from mlops.domain.experiment import ExperimentSpec
 from mlops.domain.identity import compute_experiment_id
@@ -44,6 +47,7 @@ class RunSummary:
     resumable: bool = False
     error: str | None = None
     best: BestRecord | None = None  # keep-best runs: which epoch best.pt holds
+    updated: float | None = None  # RUNNING: unix time of the last heartbeat
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -53,6 +57,7 @@ class RunSummary:
             "final_metrics": {k: None if math.isnan(v) else v for k, v in self.final_metrics.items()},
             "workers": self.workers, "resumes": self.resumes, "resumable": self.resumable, "error": self.error,
             "best": self.best.model_dump() if self.best is not None else None,
+            "updated": self.updated,
         }
 
 
@@ -97,14 +102,16 @@ class ExperimentGroup:
         }
 
 
-def list_runs(store: ArtifactStore, *, experiment: str | None = None) -> list[RunSummary]:
-    """Every run in ``store``; ``experiment`` keeps those whose ExperimentID starts with it."""
+def list_runs(store: ArtifactStore, *, experiment: str | None = None, now: float | None = None) -> list[RunSummary]:
+    """Every run in ``store``; ``experiment`` keeps those whose ExperimentID starts with it.
+    ``now`` (default: the clock) decides whether a run's progress is still live."""
+    now = time.time() if now is None else now
     out = []
     for run_id in store.runs():
         files = store.list(run_id)
         if SPEC not in files:
             continue
-        s = _summarise(store, run_id, files)
+        s = _summarise(store, run_id, files, now)
         if experiment is None or s.experiment_id.startswith(experiment):
             out.append(s)
     return sorted(out, key=lambda r: (r.name, r.experiment_id, r.attempt or 0, r.run_id))
@@ -117,7 +124,7 @@ def group_by_experiment(runs: list[RunSummary], *, atol: float = 0.0) -> list[Ex
     return [ExperimentGroup(exp, rs[0].name, rs, atol) for exp, rs in groups.items()]
 
 
-def _summarise(store: ArtifactStore, run_id: str, files: list[str]) -> RunSummary:
+def _summarise(store: ArtifactStore, run_id: str, files: list[str], now: float) -> RunSummary:
     try:
         spec = ExperimentSpec.model_validate_json(store.get(run_id, SPEC))
         manifest = RunManifest.model_validate_json(store.get(run_id, MANIFEST)) if MANIFEST in files else None
@@ -131,6 +138,11 @@ def _summarise(store: ArtifactStore, run_id: str, files: list[str]) -> RunSummar
         epochs_total=spec.training.epochs, workers=spec.resources.workers,
     )
     if manifest is None:
+        progress = read_progress(store, run_id) if PROGRESS in files else None
+        if progress is not None and is_live(progress, now=now):
+            return RunSummary(**base, status="RUNNING", epochs_done=progress.epoch,
+                              final_metrics=dict(progress.history[-1]) if progress.history else {},
+                              updated=progress.updated)
         return RunSummary(**base, status="INTERRUPTED" if has_ckpt else "INCOMPLETE", resumable=has_ckpt)
     return RunSummary(
         **base,

@@ -4,6 +4,8 @@
     mlops/ui/app.py    Textual: Experiments -> Runs -> Run (tabs Overview, Metrics, Environment, Report)
 
 Keys: Enter drills down, Esc goes back (or clears the filter), / filters, Tab switches tabs, q quits.
+Phase C: a run that is still training (live ``progress.json``) shows as RUNNING with its epoch,
+latest metrics and, on the Run screen, the curves so far and the heartbeat age.
 Phase B (Runs / Run screens): space marks a run, d diffs the two marked runs, r reproduces and
 R resumes the run under the cursor after a confirmation, in a background worker. The browser itself
 only reads the store; it re-reads it every ``refresh`` seconds. The actions are injected
@@ -98,6 +100,13 @@ def test_metric_rows_match_the_report():
     assert rows[0][4] == sparkline([3.0, 2.0, 1.0])
     assert history_rows(history) == (("epoch", "loss", "acc"), [("1", "3", "0.1"), ("2", "2", "0.4"), ("3", "1", "0.3")])
     assert metric_rows([]) == [] and history_rows([]) == (("epoch",), [])
+
+
+def test_overview_of_a_running_run():
+    s = _summary(status="RUNNING", attempt=None, epochs_done=2, epochs_total=5, updated=1000.0)
+    rows = dict(overview_rows(s, spec=None, manifest=None, now=1012.4))
+    assert rows["progress"] == "epoch 2 / 5, heartbeat 12s ago"
+    assert rows["environment"] == "recorded when the run ends"
 
 
 def test_overview_without_manifest():
@@ -558,3 +567,62 @@ def test_cli_ui_actions_reproduce_and_resume_for_real(tmp_path):
     assert (art / killed / REPORT).exists()
     with pytest.raises(CliError, match="already FINISHED"):
         actions.resume(killed)
+
+
+# --- phase C: live runs ---
+
+
+@pytest.fixture
+def live(artifacts, tmp_path) -> tuple[Path, str]:
+    """A copy of ``artifacts`` plus a run of the smoke spec that is training right now."""
+    import time
+
+    from mlops.application.progress import Progress, save_progress
+
+    art = tmp_path / "artifacts"
+    shutil.copytree(artifacts, art)
+    store = LocalArtifactStore(art)
+    run_id = "c" * 64
+    (art / run_id).mkdir()
+    shutil.copy(art / _finished_run_id(art) / SPEC, art / run_id / SPEC)
+    now = time.time()
+    save_progress(store, Progress(run_id=run_id, state="running", epoch=1, epochs=1, started=now - 30,
+                                  updated=now, history=[{"val/loss": 0.7}]))  # the smoke spec has 1 epoch
+    return art, run_id
+
+
+def test_running_run_shows_live(live):
+    art, run_id = live
+
+    async def steps(app, pilot):
+        from textual.widgets import DataTable, Markdown
+
+        from mlops.ui.app import RunScreen
+
+        await _to_runs(app, pilot)
+        rows = {r[1]: r for r in _rows(app.screen.query_one(DataTable))}
+        assert rows[run_id[:12]][3:6] == ("RUNNING", "1/1", "0.7")
+        app.push_screen(RunScreen(run_id))
+        await pilot.pause()
+        overview = dict(_rows(app.screen.query_one("#overview", DataTable)))
+        assert overview["status"] == "RUNNING" and overview["progress"].startswith("epoch 1 / 1")
+        assert [r[0] for r in _rows(app.screen.query_one("#history", DataTable))] == ["1"]
+        assert "still running" in app.screen.query_one("#report", Markdown).source
+
+    _drive(art, steps)
+
+
+def test_running_run_is_not_resumed(live):
+    art, run_id = live
+    fake = FakeActions()
+
+    async def steps(app, pilot):
+        from mlops.ui.app import ConfirmScreen, RunScreen
+
+        app.push_screen(RunScreen(run_id))
+        await pilot.pause()
+        await pilot.press("R")
+        assert not isinstance(app.screen, ConfirmScreen)
+
+    notes = _drive(art, steps, actions=fake.ui())
+    assert fake.calls == [] and any("RUNNING" in n for n in notes)
