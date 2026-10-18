@@ -21,6 +21,7 @@ concrete adapters (tracker, data provider, artifact store) and hands them to
     mlops diff   RUN_A RUN_B --artifacts DIR [--artifacts-b DIR] [--atol X] [--json]
     mlops list   --artifacts DIR [--experiment ID_PREFIX] [--atol X] [--json]
     mlops snapshot experiment.yaml [--data-root DIR]
+    mlops ui     --artifacts DIR [--experiment ID_PREFIX] [--refresh SECONDS]
 
 Exit codes: 0 ok, 1 training failed / bundle not reproduced / diff: different experiments,
 2 bad input (yaml, pins, wiring).
@@ -576,6 +577,20 @@ def _print_group(g: ExperimentGroup) -> None:
         print(f"  {r.run_id[:12]}  {attempt:<3}  {r.status:<11}  {epochs:<8}  {tail}".rstrip())
 
 
+def cmd_ui(args: argparse.Namespace) -> int:
+    root = Path(args.artifacts)
+    if not root.is_dir():
+        raise CliError(f"no such artifacts dir: {root}")
+    if args.refresh <= 0:
+        raise CliError(f"--refresh must be > 0, got {args.refresh}")
+    try:
+        from mlops.ui.app import MlopsApp
+    except ImportError as e:
+        raise CliError("mlops ui needs the 'tui' extra: uv pip install -e '.[tui]'") from e
+    MlopsApp(LocalArtifactStore(root), label=str(root), refresh=args.refresh, experiment=args.experiment).run()
+    return 0
+
+
 def cmd_snapshot(args: argparse.Namespace) -> int:
     spec = _load(args.experiment)
     _discover(args.experiments)
@@ -738,6 +753,13 @@ def build_parser() -> argparse.ArgumentParser:
     _add_data_root(sn)
     sn.add_argument("--experiments", default="experiments", help="package to discover components from")
     sn.set_defaults(func=cmd_snapshot)
+
+    ui = sub.add_parser("ui", help="terminal browser over an artifact root (needs the 'tui' extra)")
+    ui.add_argument("--artifacts", metavar="DIR", required=True, help="artifact root to browse")
+    ui.add_argument("--experiment", metavar="ID", help="only this ExperimentID (a prefix is enough)")
+    ui.add_argument("--refresh", type=float, default=2.0, metavar="SECONDS",
+                    help="re-read the artifact root this often (default 2)")
+    ui.set_defaults(func=cmd_ui)
     return p
 
 

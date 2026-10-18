@@ -17,10 +17,15 @@ dev = [
     "pytest>=8.0",
     "mlflow>=3.0",  # so the MLflow tracker tests run on the dev box
     "ray[train]>=2.40",  # so the Ray launcher tests run on the dev box
+    "textual>=8.0",  # so the `mlops ui` tests run on the dev box
 ]
 # Optional tracking backends. The core never imports them at module import time.
 tracking = [
     "mlflow>=3.0",
+]
+# `mlops ui`: terminal browser over an artifact root.
+tui = [
+    "textual>=8.0",
 ]
 # Distributed training via Ray Train; on Kubernetes the same code runs under a KubeRay RayJob.
 distributed = [
