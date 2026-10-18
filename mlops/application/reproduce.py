@@ -22,7 +22,7 @@ from typing import Any
 import torch
 
 from mlops.application.bundle import Bundle, load_bundle
-from mlops.application.diff import Change, diff_environments
+from mlops.application.diff import Change, change_lines, diff_environments
 from mlops.application.runner import run_experiment
 from mlops.domain.best import BestCriterion
 from mlops.ports.artifacts import ArtifactStore
@@ -164,4 +164,20 @@ def _compare_states(a: dict[str, Any], b: dict[str, Any], atol: float, prefix: s
         if not same:
             diff = (ta.float() - tb.float()).abs().max().item()
             out.append(Mismatch("weights", f"{prefix}{k}: max |diff| = {diff:.3g} (atol {atol:g})"))
+    return out
+
+
+def reproduce_lines(name: str, r: ReproduceReport) -> list[str]:
+    """What `mlops reproduce` prints (and the UI shows): verdict, per-check result, mismatches,
+    and the environment differences as the likely explanation."""
+    out = [
+        f"{name}: {'REPRODUCED' if r.ok else 'NOT REPRODUCED'}",
+        f"  experiment_id  {r.experiment_id}",
+        f"  run_id         {r.run_id}",
+        *(f"  {check:<14} {'ok' if passed else 'MISMATCH'}" for check, passed in r.checks.items()),
+        *(f"    {m.check}: {m.detail}" for m in r.mismatches),
+    ]
+    if r.environment:
+        heading = "environment differences (likely cause):" if not r.ok else "environment differences (did not matter):"
+        out += change_lines(f"  {heading}", r.environment)
     return out

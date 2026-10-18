@@ -21,7 +21,9 @@ concrete adapters (tracker, data provider, artifact store) and hands them to
     mlops diff   RUN_A RUN_B --artifacts DIR [--artifacts-b DIR] [--atol X] [--json]
     mlops list   --artifacts DIR [--experiment ID_PREFIX] [--atol X] [--json]
     mlops snapshot experiment.yaml [--data-root DIR]
-    mlops ui     --artifacts DIR [--experiment ID_PREFIX] [--refresh SECONDS]
+    mlops ui     --artifacts DIR [--experiment ID_PREFIX] [--refresh SECONDS] [--data-root DIR]
+                                 [--tracker mlflow|inmemory] [--mlflow-uri URI] [--device cpu]
+                                 [--ray-address ADDR] [--atol X]
 
 Exit codes: 0 ok, 1 training failed / bundle not reproduced / diff: different experiments,
 2 bad input (yaml, pins, wiring).
@@ -39,7 +41,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import os
 import shlex
 import subprocess
@@ -64,11 +65,11 @@ from mlops.adapters.synthetic_data import SyntheticBlobs
 from mlops.application import RunnerError
 from mlops.application.bundle import LAUNCH, MANIFEST, SPEC, load_bundle, load_checkpoint, load_launch
 from mlops.application.launch import Launcher, LocalLauncher
-from mlops.application.runner import verify_data
-from mlops.application.diff import ABSENT, Change, HistoryDiff, RunDiff, diff_runs
+from mlops.application.runner import RunResult, verify_data
+from mlops.application.diff import RunDiff, diff_lines, diff_runs, format_value
 from mlops.application.listing import ExperimentGroup, group_by_experiment, list_runs
 from mlops.application.report import render_report, write_report
-from mlops.application.reproduce import ReproduceError, ReproduceReport, reproduce_run
+from mlops.application.reproduce import ReproduceError, ReproduceReport, reproduce_lines, reproduce_run
 from mlops.config import ConfigError, load_experiment_yaml
 from mlops.domain import ExperimentSpec, RunManifest, UnpinnedInputError, compute_experiment_id, compute_run_id
 from mlops.domain.best import BestCriterion
@@ -78,6 +79,7 @@ from mlops.ports.data import DataError, DataProvider
 from mlops.ports.environment import EnvironmentProbe
 from mlops.ports.tracking import Tracker, TrackerError
 from mlops.registry import DATASETS, RegistryError, discover
+from mlops.ui.actions import UiActions
 
 # Built-in dataset name -> provider factory. Real datasets are plugins registered in DATASETS.
 _DATA_PROVIDERS: dict[str, Callable[[], DataProvider]] = {
@@ -273,39 +275,43 @@ def _print_summary(spec: ExperimentSpec, s: dict[str, Any]) -> None:
         print(f"  artifacts      {s['artifacts']}")
 
 
-def cmd_resume(args: argparse.Namespace) -> int:
-    store = LocalArtifactStore(args.artifacts)
+def _resume_target(store: LocalArtifactStore, run_id: str, *, ray_address: str | None,
+                   experiments: str) -> tuple[ExperimentSpec, Launcher, int, str]:
+    """(spec, launcher, attempt, launcher name) to continue ``run_id``; refuses a FINISHED run or
+    one with nothing to resume from. Shared by `mlops resume` and `mlops ui`."""
     try:
-        spec = ExperimentSpec.model_validate_json(store.get(args.run_id, SPEC))
+        spec = ExperimentSpec.model_validate_json(store.get(run_id, SPEC))
     except ArtifactError as e:
         raise CliError(str(e)) from e
-    launcher: Launcher
     try:
-        finished = RunManifest.model_validate_json(store.get(args.run_id, MANIFEST)).status == "FINISHED"
+        finished = RunManifest.model_validate_json(store.get(run_id, MANIFEST)).status == "FINISHED"
     except ArtifactError:
         finished = False
     if finished:  # checked first: a finished run has usually dropped its checkpoint
-        raise CliError(f"run {args.run_id} already FINISHED; nothing to resume")
-    if LAUNCH in store.list(args.run_id):
+        raise CliError(f"run {run_id} already FINISHED; nothing to resume")
+    if LAUNCH in store.list(run_id):
         # A Ray run: its checkpoints live in Ray storage; resume through Ray with the same storage.
-        launch = load_launch(store, args.run_id)
-        attempt = launch.attempt
+        launch = load_launch(store, run_id)
         try:
             from mlops.adapters.ray_launcher import RayLauncher
         except ImportError as e:
             raise CliError("this run was launched on Ray; resuming it needs the 'distributed' extra") from e
-        launcher = RayLauncher(address=args.ray_address, storage_path=launch.storage_path,
-                               experiments=args.experiments)
-        args.launcher = "ray"
-    else:
-        try:
-            attempt = load_checkpoint(store, args.run_id).attempt
-        except ArtifactError:
-            raise CliError(
-                f"no checkpoint for run {args.run_id}: nothing to resume "
-                "(only runs started with --checkpoint-every can be resumed)"
-            ) from None
-        launcher = LocalLauncher()
+        return spec, RayLauncher(address=ray_address, storage_path=launch.storage_path,
+                                 experiments=experiments), launch.attempt, "ray"
+    try:
+        attempt = load_checkpoint(store, run_id).attempt
+    except ArtifactError:
+        raise CliError(
+            f"no checkpoint for run {run_id}: nothing to resume "
+            "(only runs started with --checkpoint-every can be resumed)"
+        ) from None
+    return spec, LocalLauncher(), attempt, "local"
+
+
+def cmd_resume(args: argparse.Namespace) -> int:
+    store = LocalArtifactStore(args.artifacts)
+    spec, launcher, attempt, args.launcher = _resume_target(
+        store, args.run_id, ray_address=args.ray_address, experiments=args.experiments)
     _check_checkpoint_args(args)
     _discover(args.experiments)
     data = _data_provider(spec, args.data_root)
@@ -438,16 +444,7 @@ def cmd_reproduce(args: argparse.Namespace) -> int:
 
 
 def _print_report(spec: ExperimentSpec, r: ReproduceReport) -> None:
-    print(f"{spec.meta.name}: {'REPRODUCED' if r.ok else 'NOT REPRODUCED'}")
-    print(f"  experiment_id  {r.experiment_id}")
-    print(f"  run_id         {r.run_id}")
-    for check, passed in r.checks.items():
-        print(f"  {check:<14} {'ok' if passed else 'MISMATCH'}")
-    for m in r.mismatches:
-        print(f"    {m.check}: {m.detail}")
-    if r.environment:
-        heading = "environment differences (likely cause):" if not r.ok else "environment differences (did not matter):"
-        _print_changes(f"  {heading}", r.environment)
+    print("\n".join(reproduce_lines(spec.meta.name, r)))
 
 
 def cmd_report(args: argparse.Namespace) -> int:
@@ -476,61 +473,8 @@ def cmd_diff(args: argparse.Namespace) -> int:
     return 0 if d.same_experiment else 1
 
 
-def _fmt(v: Any) -> str:
-    if v is ABSENT:
-        return "(absent)"
-    if isinstance(v, float):
-        return f"{v:.6g}"
-    return v if isinstance(v, str) else json.dumps(v, sort_keys=True)
-
-
-def _print_changes(title: str, changes: list[Change]) -> None:
-    if not changes:
-        return
-    print(title)
-    width = max(len(c.path) for c in changes)
-    for c in changes:
-        print(f"  {c.path:<{width}}  {_fmt(c.a)} -> {_fmt(c.b)}")
-
-
-def _print_history(h: HistoryDiff | None) -> None:
-    if h is None:
-        return
-    if h.first_divergence is None:
-        if h.epochs_a == h.epochs_b:
-            print(f"history: identical over all {h.epochs_a} epochs")
-        else:
-            print(f"history: identical over the {h.identical_epochs} common epochs "
-                  f"(a has {h.epochs_a}, b has {h.epochs_b})")
-        return
-    print(f"history: identical for {h.identical_epochs} epochs, first differs at epoch {h.first_divergence}")
-    width = max(len(m.name) for m in h.at_divergence)
-    for m in h.at_divergence:
-        print(f"  {m.name:<{width}}  {_fmt(m.a)} -> {_fmt(m.b)}")
-
-
 def _print_diff(d: RunDiff) -> None:
-    def side(run: str, attempt: int | None, status: str) -> str:
-        return f"{run[:12]} (attempt {attempt if attempt is not None else '?'}, {status})"
-
-    print(f"a: {side(d.run_a, d.attempt_a, d.status_a)}")
-    print(f"b: {side(d.run_b, d.attempt_b, d.status_b)}")
-    if d.same_experiment:
-        print(f"same experiment: fingerprints identical ({d.experiment_id_a[:12]})")
-    else:
-        print(f"different experiments: {len(d.experiment)} fingerprint change(s)")
-    _print_changes("experiment (in the ExperimentID):", d.experiment)
-    _print_changes("run (RunID only):", d.run)
-    _print_changes("labels (in no id):", d.labels)
-    _print_changes("environment (what each run ran on):", d.environment)
-    _print_history(d.history)
-    _print_changes("best (keep-best):", d.best)
-    if d.metrics:
-        print("final metrics:")
-        width = max(len(m.name) for m in d.metrics)
-        for m in d.metrics:
-            delta = f"  ({m.delta:+.4g})" if m.delta is not None and not math.isnan(m.delta) else ""
-            print(f"  {m.name:<{width}}  {_fmt(m.a)} -> {_fmt(m.b)}{delta}")
+    print("\n".join(diff_lines(d)))
 
 
 def cmd_list(args: argparse.Namespace) -> int:
@@ -557,7 +501,7 @@ def _print_group(g: ExperimentGroup) -> None:
         same = "identical" if g.atol == 0 else f"agree within {g.atol:g}"
         verdict = f"{g.finished} finished, final metrics {same}"
     else:
-        ranges = ", ".join(f"{k} {_fmt(lo)}..{_fmt(hi)}" for k, (lo, hi) in g.spread.items())
+        ranges = ", ".join(f"{k} {format_value(lo)}..{format_value(hi)}" for k, (lo, hi) in g.spread.items())
         verdict = f"{g.finished} finished, final metrics DIFFER: {ranges}"
     print(f"{g.name}  {g.experiment_id[:12]}  ({len(g.runs)} run(s); {verdict})")
     for r in g.runs:
@@ -572,7 +516,7 @@ def _print_group(g: ExperimentGroup) -> None:
             notes.append(f"resumable: mlops resume {r.run_id[:12]}...")
         if r.error:
             notes.append(r.error)
-        metrics = "  ".join(f"{k}={_fmt(v)}" for k, v in r.final_metrics.items())
+        metrics = "  ".join(f"{k}={format_value(v)}" for k, v in r.final_metrics.items())
         tail = "  ".join(x for x in (metrics, "; ".join(notes)) if x)
         print(f"  {r.run_id[:12]}  {attempt:<3}  {r.status:<11}  {epochs:<8}  {tail}".rstrip())
 
@@ -587,8 +531,42 @@ def cmd_ui(args: argparse.Namespace) -> int:
         from mlops.ui.app import MlopsApp
     except ImportError as e:
         raise CliError("mlops ui needs the 'tui' extra: uv pip install -e '.[tui]'") from e
-    MlopsApp(LocalArtifactStore(root), label=str(root), refresh=args.refresh, experiment=args.experiment).run()
+    store = LocalArtifactStore(root)
+    MlopsApp(store, label=str(root), refresh=args.refresh, experiment=args.experiment,
+             actions=_ui_actions(args, store), atol=args.atol).run()
     return 0
+
+
+def _ui_actions(args: argparse.Namespace, store: LocalArtifactStore) -> UiActions:
+    """reproduce / resume for `mlops ui`, wired like `mlops reproduce` and `mlops resume`."""
+
+    def reproduce(run_id: str) -> ReproduceReport:
+        try:
+            spec = ExperimentSpec.model_validate_json(store.get(run_id, SPEC))
+        except ArtifactError as e:
+            raise CliError(str(e)) from e
+        _discover(args.experiments)
+        return reproduce_run(
+            store, run_id, data=_data_provider(spec, args.data_root),
+            tracker=_tracker(spec, args.tracker, args.mlflow_uri), scratch=InMemoryArtifactStore(),
+            device=args.device, atol=args.atol, probe=_probe(),
+        )
+
+    def resume(run_id: str) -> RunResult:
+        spec, launcher, attempt, _ = _resume_target(store, run_id, ray_address=args.ray_address,
+                                                    experiments=args.experiments)
+        _discover(args.experiments)
+        try:
+            return launcher.launch(spec, data=_data_provider(spec, args.data_root),
+                                   tracker=_tracker(spec, args.tracker, args.mlflow_uri), artifacts=store,
+                                   attempt=attempt, device=args.device, probe=_probe(), resume=True)
+        finally:  # FINISHED or FAILED: the bundle's report.md follows it, as after `mlops resume`
+            try:
+                write_report(store, run_id)
+            except ArtifactError:
+                pass
+
+    return UiActions(reproduce=reproduce, resume=resume)
 
 
 def cmd_snapshot(args: argparse.Namespace) -> int:
@@ -759,6 +737,14 @@ def build_parser() -> argparse.ArgumentParser:
     ui.add_argument("--experiment", metavar="ID", help="only this ExperimentID (a prefix is enough)")
     ui.add_argument("--refresh", type=float, default=2.0, metavar="SECONDS",
                     help="re-read the artifact root this often (default 2)")
+    _add_data_root(ui)
+    ui.add_argument("--tracker", choices=["mlflow", "inmemory"], help="for reproduce/resume: override tracking.backend")
+    ui.add_argument("--mlflow-uri", metavar="URI", help="for reproduce/resume: override tracking.uri")
+    ui.add_argument("--device", help="for reproduce/resume: torch device override, e.g. cpu")
+    ui.add_argument("--ray-address", metavar="ADDR", help="for resuming a Ray run")
+    ui.add_argument("--atol", type=float, default=0.0, metavar="X",
+                    help="diff/reproduce tolerance (default 0: exact)")
+    ui.add_argument("--experiments", default="experiments", help="package to discover components from")
     ui.set_defaults(func=cmd_ui)
     return p
 

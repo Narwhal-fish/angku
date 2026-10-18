@@ -2,26 +2,35 @@
 
 Experiments -> Runs -> Run (tabs Overview, Metrics, Environment, Report). Enter drills down,
 Esc goes back (or clears the filter first), / filters the list, Tab cycles the run's tabs.
-Read-only: it goes through ``application.listing`` / ``report`` and never writes the store;
-every screen re-reads it every ``refresh`` seconds and redraws only what changed.
+Browsing is read-only: it goes through ``application.listing`` / ``report`` and every screen
+re-reads the store every ``refresh`` seconds, redrawing only what changed.
+
+Actions (Runs and Run screens): space marks a run, d diffs the two marked ones, r reproduces and
+R resumes the run under the cursor. r and R ask first, then run ``UiActions`` (injected by the
+CLI) in a thread worker, one at a time; the result opens in a dialog, a failure is a notification.
 """
 
 from __future__ import annotations
 
+from functools import partial
 from typing import Any
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import VerticalScroll
-from textual.screen import Screen
-from textual.widgets import DataTable, Footer, Header, Input, Markdown, TabbedContent, TabPane
+from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.screen import ModalScreen, Screen
+from textual.widgets import Button, DataTable, Footer, Header, Input, Label, Markdown, Static, TabbedContent, TabPane
+from textual.worker import Worker, WorkerState
 
 from mlops.application.bundle import MANIFEST, SPEC, load_bundle
+from mlops.application.diff import diff_lines, diff_runs
 from mlops.application.listing import RunSummary, group_by_experiment, list_runs
 from mlops.application.report import REPORT, render_report
+from mlops.application.reproduce import ReproduceReport, reproduce_lines
 from mlops.domain.experiment import ExperimentSpec
 from mlops.domain.manifest import RunManifest
 from mlops.ports.artifacts import ArtifactError, ArtifactStore
+from mlops.ui.actions import UiActions
 from mlops.ui.rows import (
     ACTUAL_COLUMNS,
     CHECK_COLUMNS,
@@ -33,6 +42,7 @@ from mlops.ui.rows import (
     main_metric,
     metric_rows,
     overview_rows,
+    resume_lines,
     run_columns,
     run_row,
 )
@@ -140,10 +150,16 @@ class ExperimentsScreen(TableScreen):
         self.app.push_screen(RunsScreen(key))
 
 
+RUN_ACTIONS = [Binding("r", "reproduce", "Reproduce"), Binding("R", "resume", "Resume")]
+
+
 class RunsScreen(TableScreen):
+    BINDINGS = [Binding("space", "mark", "Mark"), Binding("d", "diff", "Diff marked"), *RUN_ACTIONS]
+
     def __init__(self, experiment_id: str) -> None:
         super().__init__()
         self.experiment_id = experiment_id
+        self.marked: list[str] = []  # at most two run_ids, oldest first
 
     def _mine(self, runs: list[RunSummary]) -> list[RunSummary]:
         return [r for r in runs if r.experiment_id == self.experiment_id]
@@ -155,15 +171,45 @@ class RunsScreen(TableScreen):
         super().on_mount()
 
     def columns(self, runs: list[RunSummary]) -> tuple[str, ...]:
-        return run_columns(main_metric(self._mine(runs)))
+        return ("", *run_columns(main_metric(self._mine(runs))))
 
     def rows(self, runs: list[RunSummary]) -> Rows:
         mine = self._mine(runs)
         metric = main_metric(mine)
-        return [(r.run_id, run_row(r, metric)) for r in mine]
+        return [(r.run_id, ("*" if r.run_id in self.marked else " ", *run_row(r, metric))) for r in mine]
 
     def open(self, key: str) -> None:
         self.app.push_screen(RunScreen(key))
+
+    def cursor_run(self) -> str | None:
+        table = self.query_one(DataTable)
+        if not table.row_count:
+            return None
+        return table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value
+
+    def action_mark(self) -> None:
+        run_id = self.cursor_run()
+        if run_id is None:
+            return
+        if run_id in self.marked:
+            self.marked.remove(run_id)
+        else:
+            self.marked = [*self.marked, run_id][-2:]
+        self.refresh_rows()
+
+    def action_diff(self) -> None:
+        if len(self.marked) != 2:
+            self.notify("Mark two runs with space, then press d.", severity="warning")
+            return
+        self.app.push_screen(DiffScreen(*self.marked))
+
+    def action_reproduce(self) -> None:
+        if (run_id := self.cursor_run()) is not None:
+            self.app.request("reproduce", run_id)
+
+    def action_resume(self) -> None:
+        if (run_id := self.cursor_run()) is not None:
+            self.app.request("resume", run_id)
 
 
 class RunScreen(Screen[None]):
@@ -172,6 +218,7 @@ class RunScreen(Screen[None]):
         Binding("escape", "back", "Back"),
         Binding("tab", "next_tab", "Next tab", priority=True),
         Binding("shift+tab", "prev_tab", "Prev tab", priority=True),
+        *RUN_ACTIONS,
     ]
 
     def __init__(self, run_id: str) -> None:
@@ -250,6 +297,84 @@ class RunScreen(Screen[None]):
     def action_back(self) -> None:
         self.app.pop_screen()
 
+    def action_reproduce(self) -> None:
+        self.app.request("reproduce", self.run_id)
+
+    def action_resume(self) -> None:
+        self.app.request("resume", self.run_id)
+
+
+class DiffScreen(Screen[None]):
+    """What `mlops diff` prints for the two runs."""
+
+    BINDINGS = [Binding("escape", "back", "Back")]
+
+    def __init__(self, run_a: str, run_b: str) -> None:
+        super().__init__()
+        self.run_a, self.run_b = run_a, run_b
+        self.lines: list[str] = []
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        with VerticalScroll():
+            yield Static(id="diff")
+        yield Footer()
+
+    def on_mount(self) -> None:
+        self.sub_title = f"Diff {self.run_a[:12]} .. {self.run_b[:12]}"
+        store = self.app.store
+        try:
+            self.lines = diff_lines(diff_runs(store, self.run_a, store, self.run_b, atol=self.app.atol))
+        except ArtifactError as e:
+            self.lines = [f"cannot diff: {e}"]
+        self.query_one("#diff", Static).update("\n".join(self.lines))
+
+    def action_back(self) -> None:
+        self.app.pop_screen()
+
+
+class ConfirmScreen(ModalScreen[bool]):
+    BINDINGS = [Binding("y", "answer(True)", "Yes"), Binding("n", "answer(False)", "No"),
+                Binding("escape", "answer(False)", "No")]
+
+    def __init__(self, question: str) -> None:
+        super().__init__()
+        self.question = question
+
+    def compose(self) -> ComposeResult:
+        with Vertical(classes="dialog"):
+            yield Label(self.question)
+            with Horizontal(classes="buttons"):
+                yield Button("Yes (y)", id="yes", variant="primary")
+                yield Button("No (n)", id="no")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss(event.button.id == "yes")
+
+    def action_answer(self, yes: bool) -> None:
+        self.dismiss(yes)
+
+
+class ResultScreen(ModalScreen[None]):
+    BINDINGS = [Binding("escape", "close", "Close"), Binding("enter", "close", "Close")]
+
+    def __init__(self, lines: list[str]) -> None:
+        super().__init__()
+        self.lines = lines
+
+    def compose(self) -> ComposeResult:
+        with Vertical(classes="dialog"):
+            with VerticalScroll():
+                yield Static("\n".join(self.lines), markup=False)
+            with Horizontal(classes="buttons"):
+                yield Button("Close (esc)", id="close")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss()
+
+    def action_close(self) -> None:
+        self.dismiss()
+
 
 class MlopsApp(App[None]):
     TITLE = "mlops"
@@ -257,16 +382,24 @@ class MlopsApp(App[None]):
     #filter { dock: bottom; display: none; }
     #filter.active { display: block; }
     #metrics, #checks { height: auto; margin-bottom: 1; }
+    ConfirmScreen, ResultScreen { align: center middle; }
+    .dialog { width: 90%; max-width: 110; height: auto; max-height: 90%; border: thick $accent; padding: 1 2; background: $surface; }
+    .dialog VerticalScroll { height: auto; max-height: 30; }
+    .buttons { height: auto; margin-top: 1; }
+    .dialog Button { margin-right: 2; }
     """
     BINDINGS = [Binding("q", "quit", "Quit"), Binding("question_mark", "toggle_help", "Help")]
 
     def __init__(self, store: ArtifactStore, *, label: str, refresh: float = 2.0,
-                 experiment: str | None = None) -> None:
+                 experiment: str | None = None, actions: UiActions | None = None, atol: float = 0.0) -> None:
         super().__init__()
         self.store = store
         self.label = label
         self.refresh_every = refresh
         self.experiment = experiment
+        self.actions = actions
+        self.atol = atol
+        self.busy: str | None = None  # "reproduce <run>" while an action runs
 
     def get_default_screen(self) -> Screen[Any]:
         return ExperimentsScreen()
@@ -279,3 +412,57 @@ class MlopsApp(App[None]):
             self.action_hide_help_panel()
         else:
             self.action_show_help_panel()
+
+    # -- actions ----------------------------------------------------------------
+
+    def request(self, kind: str, run_id: str) -> None:
+        """Check, ask, then run ``kind`` ("reproduce" | "resume") on ``run_id`` in the background."""
+        if self.actions is None:
+            self.notify(f"{kind} is not available here.", severity="warning")
+            return
+        if self.busy is not None:
+            self.notify(f"{self.busy} is already running; one action at a time.", severity="warning")
+            return
+        run = next((r for r in self.runs() if r.run_id == run_id), None)
+        if run is None:
+            self.notify(f"run {run_id[:12]} is not in the store.", severity="error")
+            return
+        if kind == "reproduce" and run.status != "FINISHED":
+            self.notify(f"{run_id[:12]} is {run.status}: only FINISHED runs can be reproduced.", severity="warning")
+            return
+        if kind == "resume" and not run.resumable:
+            self.notify(f"{run_id[:12]} is {run.status} and not resumable.", severity="warning")
+            return
+        epochs = run.epochs_total or "?"
+        question = (
+            f"Reproduce {run.name} {run_id[:12]}? This re-runs its {epochs} epoch(s) on this machine."
+            if kind == "reproduce" else
+            f"Resume {run.name} {run_id[:12]} from its checkpoint ({run.epochs_done or '?'}/{epochs} epochs)?"
+        )
+
+        def answered(yes: bool | None) -> None:
+            if yes:
+                self._start(kind, run_id, run.name)
+
+        self.push_screen(ConfirmScreen(question), answered)
+
+    def _start(self, kind: str, run_id: str, name: str) -> None:
+        assert self.actions is not None
+        self.busy = f"{kind} {run_id[:12]}"
+        self.notify(f"{self.busy} started.")
+        fn = self.actions.reproduce if kind == "reproduce" else self.actions.resume
+        self.run_worker(partial(fn, run_id), name=name, group=kind, thread=True, exit_on_error=False)
+
+    def on_worker_state_changed(self, event: Worker.StateChanged) -> None:
+        worker = event.worker
+        if worker.group not in ("reproduce", "resume"):
+            return
+        if event.state == WorkerState.SUCCESS:
+            self.busy = None
+            result = worker.result
+            lines = (reproduce_lines(worker.name, result) if isinstance(result, ReproduceReport)
+                     else resume_lines(worker.name, result))
+            self.push_screen(ResultScreen(lines))
+        elif event.state in (WorkerState.ERROR, WorkerState.CANCELLED):
+            self.notify(f"{self.busy} failed: {worker.error}", severity="error", timeout=30)
+            self.busy = None

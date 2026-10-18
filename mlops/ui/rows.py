@@ -19,6 +19,7 @@ from mlops.application.report import (
     record_verdict,
     sparkline,
 )
+from mlops.application.runner import RunResult
 from mlops.domain.experiment import ExperimentSpec
 from mlops.domain.manifest import RunManifest
 
@@ -126,3 +127,10 @@ def environment_rows(manifest: RunManifest | None) -> tuple[list[tuple[str, ...]
         return [], []
     actual = actual_rows(manifest.environment, manifest.device) if manifest.environment is not None else []
     return check_rows(manifest), [(k, v.replace("`", "")) for k, v in actual]
+
+
+def resume_lines(name: str, result: RunResult) -> list[str]:
+    out = [f"{name}: FINISHED", f"  run_id         {result.run_id}"]
+    if result.resumes:
+        out.append(f"  resumed after epoch {result.resumes[-1].epoch}")
+    return [*out, f"  epochs         {len(result.history)}"]

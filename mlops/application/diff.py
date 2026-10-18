@@ -22,6 +22,7 @@ only is ``ABSENT`` on the other.
 
 from __future__ import annotations
 
+import json
 import math
 from dataclasses import dataclass, field
 from typing import Any
@@ -284,3 +285,60 @@ def _sides(out: dict[str, Any], a: Any, b: Any) -> dict[str, Any]:
 def _json_float(v: Any) -> Any:
     return None if isinstance(v, float) and math.isnan(v) else v
 
+
+
+# -- text: what `mlops diff` prints, and what the UI shows ----------------------
+
+
+def format_value(v: Any) -> str:
+    if v is ABSENT:
+        return "(absent)"
+    if isinstance(v, float):
+        return f"{v:.6g}"
+    return v if isinstance(v, str) else json.dumps(v, sort_keys=True)
+
+
+def change_lines(title: str, changes: list[Change]) -> list[str]:
+    if not changes:
+        return []
+    width = max(len(c.path) for c in changes)
+    return [title, *(f"  {c.path:<{width}}  {format_value(c.a)} -> {format_value(c.b)}" for c in changes)]
+
+
+def history_lines(h: HistoryDiff | None) -> list[str]:
+    if h is None:
+        return []
+    if h.first_divergence is None:
+        if h.epochs_a == h.epochs_b:
+            return [f"history: identical over all {h.epochs_a} epochs"]
+        return [f"history: identical over the {h.identical_epochs} common epochs "
+                f"(a has {h.epochs_a}, b has {h.epochs_b})"]
+    width = max(len(m.name) for m in h.at_divergence)
+    return [
+        f"history: identical for {h.identical_epochs} epochs, first differs at epoch {h.first_divergence}",
+        *(f"  {m.name:<{width}}  {format_value(m.a)} -> {format_value(m.b)}" for m in h.at_divergence),
+    ]
+
+
+def diff_lines(d: RunDiff) -> list[str]:
+    def side(run: str, attempt: int | None, status: str) -> str:
+        return f"{run[:12]} (attempt {attempt if attempt is not None else '?'}, {status})"
+
+    out = [f"a: {side(d.run_a, d.attempt_a, d.status_a)}", f"b: {side(d.run_b, d.attempt_b, d.status_b)}"]
+    if d.same_experiment:
+        out.append(f"same experiment: fingerprints identical ({d.experiment_id_a[:12]})")
+    else:
+        out.append(f"different experiments: {len(d.experiment)} fingerprint change(s)")
+    out += change_lines("experiment (in the ExperimentID):", d.experiment)
+    out += change_lines("run (RunID only):", d.run)
+    out += change_lines("labels (in no id):", d.labels)
+    out += change_lines("environment (what each run ran on):", d.environment)
+    out += history_lines(d.history)
+    out += change_lines("best (keep-best):", d.best)
+    if d.metrics:
+        out.append("final metrics:")
+        width = max(len(m.name) for m in d.metrics)
+        for m in d.metrics:
+            delta = f"  ({m.delta:+.4g})" if m.delta is not None and not math.isnan(m.delta) else ""
+            out.append(f"  {m.name:<{width}}  {format_value(m.a)} -> {format_value(m.b)}{delta}")
+    return out
