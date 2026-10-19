@@ -74,6 +74,7 @@ from mlops.application.runner import RunResult, verify_data
 from mlops.application.diff import RunDiff, diff_lines, diff_runs, format_value
 from mlops.application.listing import ExperimentGroup, group_by_experiment, list_runs
 from mlops.application.progress import PROGRESS, is_live, read_progress
+from mlops.application.predict import PredictError, list_results, prediction_lines, predict_run, result_line
 from mlops.application.report import render_report, split_counts, split_rule, write_report
 from mlops.application.reproduce import ReproduceError, ReproduceReport, reproduce_lines, reproduce_run
 from mlops.config import ConfigError, load_experiment_yaml
@@ -467,6 +468,39 @@ def _print_report(spec: ExperimentSpec, r: ReproduceReport) -> None:
     print("\n".join(reproduce_lines(spec.meta.name, r)))
 
 
+def cmd_predict(args: argparse.Namespace) -> int:
+    store = LocalArtifactStore(args.artifacts)
+    try:
+        spec = ExperimentSpec.model_validate_json(store.get(args.run_id, SPEC))
+    except ArtifactError as e:
+        raise CliError(str(e)) from e
+    _discover(args.experiments)
+    data = _data_provider(spec, args.data_root)
+    try:
+        record = predict_run(
+            store, args.run_id, data=data, part=args.part, weights=args.weights, device=args.device,
+            probe=_probe(), save_predictions=args.save_predictions,
+        )
+    except (PredictError, ArtifactError, DataError, RegistryError, RunnerError) as e:
+        raise CliError(str(e)) from e
+    if args.json:
+        print(record.model_dump_json(indent=2))
+    else:
+        print("\n".join(prediction_lines(record)))
+        print(f"  result     {Path(args.artifacts) / record.result_id}")
+    return 0
+
+
+def cmd_results(args: argparse.Namespace) -> int:
+    records = list_results(LocalArtifactStore(args.artifacts))
+    if args.json:
+        print(json.dumps([json.loads(r.model_dump_json()) for r in records], indent=2))
+    else:
+        for r in records:
+            print(result_line(r))
+    return 0
+
+
 def cmd_report(args: argparse.Namespace) -> int:
     try:
         md = render_report(load_bundle(LocalArtifactStore(args.artifacts), args.run_id))
@@ -732,6 +766,26 @@ def build_parser() -> argparse.ArgumentParser:
     rp.add_argument("--experiments", default="experiments", help="package to discover components from")
     rp.add_argument("--json", action="store_true", help="machine-readable report on stdout")
     rp.set_defaults(func=cmd_reproduce)
+
+    pr = sub.add_parser("predict", help="apply a finished run's model to its test (or val) cases and store "
+                                        "the result next to the runs")
+    pr.add_argument("run_id", help="FINISHED run whose model predicts; its bundle must be under --artifacts")
+    pr.add_argument("--artifacts", metavar="DIR", required=True, help="artifact root holding DIR/<run_id>/")
+    pr.add_argument("--part", choices=["test", "val"], default="test",
+                    help="which cases (default test; val was seen during training, so its numbers are optimistic)")
+    pr.add_argument("--weights", choices=["best.pt", "model.pt"],
+                    help="default: best.pt when the run kept one, else model.pt")
+    pr.add_argument("--save-predictions", action="store_true", help="also store each case's predicted labels")
+    _add_data_root(pr)
+    pr.add_argument("--device", help="torch device override, e.g. cpu")
+    pr.add_argument("--experiments", default="experiments", help="package to discover components from")
+    pr.add_argument("--json", action="store_true", help="the result record on stdout")
+    pr.set_defaults(func=cmd_predict)
+
+    rs = sub.add_parser("results", help="prediction results under an artifact root")
+    rs.add_argument("--artifacts", metavar="DIR", required=True, help="artifact root to scan")
+    rs.add_argument("--json", action="store_true", help="machine-readable listing on stdout")
+    rs.set_defaults(func=cmd_results)
 
     rr = sub.add_parser("report", help="render the human-readable Markdown report of a run from its bundle")
     rr.add_argument("run_id", help="run to report on; its bundle must be under --artifacts")

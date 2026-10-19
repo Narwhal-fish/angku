@@ -173,6 +173,22 @@ runs/<run_id>/
 
 This folder is everything someone else needs to reproduce the run.
 
+## Evaluate a trained model
+
+```bash
+mlops predict <run_id> --artifacts runs
+```
+
+This applies the run's model (the best epoch's weights if you used `--keep-best`) to the test
+cases of its `split` and reports the loss and metrics, per case and on average. The run itself is
+never changed; the result goes into its own folder next to the runs, with a `report.md`. Running
+the same command again gives exactly the same numbers.
+
+Use `--part val` when the experiment has no test split, but keep in mind that validation data
+was used during training, so those numbers look better than they really are. Add
+`--save-predictions` to also keep each case's predicted labels. `mlops results --artifacts runs`
+lists everything you have evaluated.
+
 ## Commands
 
 | Command | What it does |
@@ -183,6 +199,8 @@ This folder is everything someone else needs to reproduce the run.
 | `mlops list` | Your runs, grouped by experiment, and whether repeated runs agree |
 | `mlops report <run_id>` | Write the readable report of a run |
 | `mlops diff <run_a> <run_b>` | Explain why two runs differ |
+| `mlops predict <run_id>` | Evaluate a finished run's model on its test cases |
+| `mlops results` | List your prediction results |
 | `mlops ui` | Browse your runs in the terminal |
 | `mlops id <yaml>` | Show an experiment's id without running it |
 | `mlops snapshot <yaml>` | Show the hash of your data, to put in the YAML |
