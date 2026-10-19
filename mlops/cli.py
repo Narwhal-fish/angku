@@ -74,7 +74,14 @@ from mlops.application.runner import RunResult, verify_data
 from mlops.application.diff import RunDiff, diff_lines, diff_runs, format_value
 from mlops.application.listing import ExperimentGroup, group_by_experiment, list_runs
 from mlops.application.progress import PROGRESS, is_live, read_progress
-from mlops.application.predict import PredictError, list_results, prediction_lines, predict_run, result_line
+from mlops.application.predict import (
+    PredictError,
+    ensemble_runs,
+    list_results,
+    prediction_lines,
+    predict_run,
+    result_line,
+)
 from mlops.application.report import render_report, split_counts, split_rule, write_report
 from mlops.application.reproduce import ReproduceError, ReproduceReport, reproduce_lines, reproduce_run
 from mlops.config import ConfigError, load_experiment_yaml
@@ -491,6 +498,31 @@ def cmd_predict(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_ensemble(args: argparse.Namespace) -> int:
+    if len(args.run_ids) < 2:
+        raise CliError("an ensemble needs at least two runs (use `mlops predict` for one)")
+    store = LocalArtifactStore(args.artifacts)
+    try:
+        spec = ExperimentSpec.model_validate_json(store.get(args.run_ids[0], SPEC))
+    except ArtifactError as e:
+        raise CliError(str(e)) from e
+    _discover(args.experiments)
+    data = _data_provider(spec, args.data_root)
+    try:
+        record = ensemble_runs(
+            store, args.run_ids, vote=args.vote, data=data, part=args.part, weights=args.weights,
+            device=args.device, probe=_probe(), save_predictions=args.save_predictions,
+        )
+    except (PredictError, ArtifactError, DataError, RegistryError, RunnerError) as e:
+        raise CliError(str(e)) from e
+    if args.json:
+        print(record.model_dump_json(indent=2))
+    else:
+        print("\n".join(prediction_lines(record)))
+        print(f"  result     {Path(args.artifacts) / record.result_id}")
+    return 0
+
+
 def cmd_results(args: argparse.Namespace) -> int:
     records = list_results(LocalArtifactStore(args.artifacts))
     if args.json:
@@ -781,6 +813,23 @@ def build_parser() -> argparse.ArgumentParser:
     pr.add_argument("--experiments", default="experiments", help="package to discover components from")
     pr.add_argument("--json", action="store_true", help="the result record on stdout")
     pr.set_defaults(func=cmd_predict)
+
+    en = sub.add_parser("ensemble", help="merge several runs' predictions on the same test (or val) cases "
+                                         "by soft or hard voting")
+    en.add_argument("run_ids", nargs="+", metavar="run_id", help="FINISHED runs (at least two), under --artifacts")
+    en.add_argument("--artifacts", metavar="DIR", required=True, help="artifact root holding the runs")
+    en.add_argument("--vote", choices=["soft", "hard"], required=True,
+                    help="soft: average the probabilities; hard: majority of each run's labels")
+    en.add_argument("--part", choices=["test", "val"], default="test",
+                    help="which cases (default test; k-fold runs share only the test cases)")
+    en.add_argument("--weights", choices=["best.pt", "model.pt"],
+                    help="for every run; default: best.pt when a run kept one, else model.pt")
+    en.add_argument("--save-predictions", action="store_true", help="also store each case's merged labels")
+    _add_data_root(en)
+    en.add_argument("--device", help="torch device override, e.g. cpu")
+    en.add_argument("--experiments", default="experiments", help="package to discover components from")
+    en.add_argument("--json", action="store_true", help="the result record on stdout")
+    en.set_defaults(func=cmd_ensemble)
 
     rs = sub.add_parser("results", help="prediction results under an artifact root")
     rs.add_argument("--artifacts", metavar="DIR", required=True, help="artifact root to scan")

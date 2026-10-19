@@ -19,6 +19,7 @@ from __future__ import annotations
 import io
 import math
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Any
 
 import torch
@@ -38,9 +39,11 @@ from mlops.application.runner import (
 from mlops.domain.environment import record_environment
 from mlops.domain.prediction import (
     CaseResult,
+    Kind,
     Member,
     Part,
     PredictionRecord,
+    Vote,
     Weights,
     compute_result_id,
 )
@@ -75,24 +78,109 @@ def predict_run(
 ) -> PredictionRecord:
     """Evaluate ``run_id``'s model on ``part`` and write the result into ``out`` (default: ``store``).
     ``weights`` None = ``best.pt`` when the run kept one, else ``model.pt``."""
+    return _predict(store, [run_id], kind="predict", vote=None, data=data, part=part, weights=weights,
+                    device=device, probe=probe, save_predictions=save_predictions, out=out)
+
+
+def ensemble_runs(
+    store: ArtifactStore,
+    run_ids: Sequence[str],
+    *,
+    vote: Vote,
+    data: DataProvider,
+    part: Part = "test",
+    weights: Weights | None = None,
+    device: str | None = None,
+    probe: EnvironmentProbe | None = None,
+    save_predictions: bool = False,
+    out: ArtifactStore | None = None,
+) -> PredictionRecord:
+    """Merge the predictions of several runs on the same cases. ``soft``: average the softmax
+    probabilities, then argmax (loss = the loss of that average). ``hard``: each run votes its
+    argmax per voxel, most votes wins, a tie goes to the tied class with the higher average
+    probability (no loss: votes are not probabilities). The runs must be comparable (same data,
+    preprocessing, cases of ``part``, loss, metrics, inferer; models may differ) or nothing runs.
+    The result does not depend on the order the runs are given in."""
+    if len(set(run_ids)) != len(run_ids):
+        raise PredictError("a run is listed twice: each member votes once")
+    return _predict(store, sorted(run_ids), kind="ensemble", vote=vote, data=data, part=part, weights=weights,
+                    device=device, probe=probe, save_predictions=save_predictions, out=out)
+
+
+@dataclass
+class _Loaded:
+    bundle: Bundle
+    member: Member
+    state: dict[str, Any]
+
+
+def _load(store: ArtifactStore, run_id: str, weights: Weights | None) -> _Loaded:
     bundle = load_bundle(store, run_id)
     if bundle.manifest.status != "FINISHED":
         raise PredictError(f"run {run_id[:12]} is {bundle.manifest.status}: only a FINISHED run has weights")
-    weights = weights or (BEST if bundle.best_state is not None else MODEL)
-    state = bundle.best_state if weights == BEST else bundle.model_state
+    chosen: Weights = weights or (BEST if bundle.best_state is not None else MODEL)
+    state = bundle.best_state if chosen == BEST else bundle.model_state
     if state is None:
-        raise PredictError(f"run {run_id[:12]} has no {weights} (keep-best was not asked for)")
-    spec = bundle.spec
+        raise PredictError(f"run {run_id[:12]} has no {chosen} (keep-best was not asked for)")
+    member = Member(run_id=bundle.manifest.run_id, experiment_id=bundle.manifest.experiment_id,
+                    weights=chosen, epoch=_epoch_of(bundle, chosen))
+    return _Loaded(bundle, member, state)
+
+
+# What every member must share for their predictions to be merged (and compared) case by case.
+_COMPARABLE = ("dataset", "preprocessing", "loss", "metrics", "inference")
+
+
+def _check_comparable(members: list[_Loaded]) -> None:
+    first = members[0].bundle.spec.model_dump(include=set(_COMPARABLE))
+    for m in members[1:]:
+        spec = m.bundle.spec.model_dump(include=set(_COMPARABLE))
+        for section in _COMPARABLE:
+            if first[section] != spec[section]:
+                raise PredictError(
+                    f"runs {members[0].member.run_id[:12]} and {m.member.run_id[:12]} differ in `{section}`: "
+                    "their predictions cannot be merged case by case"
+                )
+
+
+def _predict(
+    store: ArtifactStore,
+    run_ids: Sequence[str],
+    *,
+    kind: Kind,
+    vote: Vote | None,
+    data: DataProvider,
+    part: Part,
+    weights: Weights | None,
+    device: str | None,
+    probe: EnvironmentProbe | None,
+    save_predictions: bool,
+    out: ArtifactStore | None,
+) -> PredictionRecord:
+    if not run_ids:
+        raise PredictError("no run to predict with")
+    members = [_load(store, r, weights) for r in run_ids]
+    _check_comparable(members)
+    spec = members[0].bundle.spec
 
     data_check = verify_data(spec, data)
-    cases, dataset = _part(bundle, data, part)
+    parts = [_part(m.bundle, data, part) for m in members]
+    cases, dataset = parts[0]
+    for m, (other, _) in zip(members[1:], parts[1:], strict=True):
+        if other != cases:
+            raise PredictError(
+                f"runs {members[0].member.run_id[:12]} and {m.member.run_id[:12]} have different {part} cases "
+                "(k-fold members share only the test cases)"
+            )
     dev = resolve_device(spec.resources, device)
     environment = record_environment(spec, probe.capture(spec)) if probe is not None else None
 
     seed_everything(spec.training.seed, deterministic=spec.training.deterministic)
-    model: nn.Module = MODELS.build(spec.model.name, spec.model.params)
-    model.load_state_dict(state)
-    model.to(dev).eval()
+    models = []
+    for m in members:
+        model: nn.Module = MODELS.build(m.bundle.spec.model.name, m.bundle.spec.model.params)
+        model.load_state_dict(m.state)
+        models.append(model.to(dev).eval())
     loss_fn = LOSSES.build(spec.loss.name, spec.loss.params)
     if isinstance(loss_fn, nn.Module):
         loss_fn = loss_fn.to(dev)
@@ -102,30 +190,54 @@ def predict_run(
     )
 
     target = out if out is not None else store
-    member = Member(run_id=bundle.manifest.run_id, experiment_id=bundle.manifest.experiment_id,
-                    weights=weights, epoch=_epoch_of(bundle, weights))
-    method: dict[str, Any] = {}
-    result_id = compute_result_id(kind="predict", members=[member], part=part,
+    method: dict[str, Any] = {"vote": vote} if vote is not None else {}
+    result_id = compute_result_id(kind=kind, members=[m.member for m in members], part=part,
                                   dataset_snapshot=spec.dataset.snapshot, method=method)
     rows: list[CaseResult] = []
+    member_rows: list[list[CaseResult]] = [[] for _ in members]
     for i, case in enumerate(cases):
         x, y = dataset[i]
-        logits, row = _evaluate(model, x.unsqueeze(0).to(dev), y.unsqueeze(0).to(dev), loss_fn, metrics, infer)
-        rows.append(CaseResult(case=case, metrics=row))
+        x, y = x.unsqueeze(0).to(dev), y.unsqueeze(0).to(dev)
+        logits = [_logits(model, x, infer) for model in models]
+        combined, with_loss = combine(logits, vote)
+        rows.append(CaseResult(case=case, metrics=_row(combined, y, loss_fn if with_loss else None, metrics)))
+        if kind == "ensemble":
+            for j, lg in enumerate(logits):
+                member_rows[j].append(CaseResult(case=case, metrics=_row(lg, y, loss_fn, metrics)))
         if save_predictions:
             buf = io.BytesIO()
-            torch.save(logits.argmax(dim=1)[0].to(torch.uint8).cpu(), buf)
+            torch.save(combined.argmax(dim=1)[0].to(torch.uint8).cpu(), buf)
             target.put(result_id, f"{PREDICTIONS}/{case}.pt", buf.getvalue())
 
     record = PredictionRecord(
-        result_id=result_id, name=spec.meta.name, members=[member], part=part,
+        result_id=result_id, kind=kind, name=spec.meta.name, members=[m.member for m in members], part=part,
         dataset=spec.dataset.name, data_snapshot=data_check, method=method, device=str(dev),
         cases=rows, metrics=mean_metrics(rows), environment=environment,
+        member_metrics={m.member.run_id: mean_metrics(r) for m, r in zip(members, member_rows, strict=True)}
+        if kind == "ensemble" else {},
         notes=[VAL_NOTE] if part == "val" else [],
     )
     target.put(result_id, RESULT, record.model_dump_json(indent=2).encode())
     target.put(result_id, REPORT, render_prediction_report(record).encode())
     return record
+
+
+def combine(logits: Sequence[Tensor], vote: Vote | None) -> tuple[Tensor, bool]:
+    """(what the metrics see, whether a loss is defined for it). One member and no vote = its logits.
+    ``soft``: log of the mean softmax (softmax of it gives the mean back, so loss and argmax-based
+    metrics see the averaged probabilities). ``hard``: one-hot of the vote winner; ties broken by
+    the mean probability, then by the lower class index."""
+    if vote is None:
+        assert len(logits) == 1
+        return logits[0], True
+    probs = torch.stack([lg.softmax(dim=1) for lg in logits]).mean(dim=0)
+    if vote == "soft":
+        return probs.clamp_min(1e-12).log(), True
+    classes = probs.shape[1]
+    votes = sum(torch.nn.functional.one_hot(lg.argmax(dim=1), classes) for lg in logits).movedim(-1, 1)
+    # votes differ by >= 1 where they differ; 2 * votes + prob (< 1) lets the probability decide only ties.
+    winner = (2 * votes.to(probs.dtype) + probs).argmax(dim=1)
+    return torch.nn.functional.one_hot(winner, classes).movedim(-1, 1).to(probs.dtype), False
 
 
 def _part(bundle: Bundle, data: DataProvider, part: Part) -> tuple[list[str], Any]:
@@ -162,16 +274,19 @@ def _epoch_of(bundle: Bundle, weights: Weights) -> int | None:
 
 
 @torch.no_grad()
-def _evaluate(model: nn.Module, x: Tensor, y: Tensor, loss_fn: Any, metrics: Sequence[Metric],
-              infer: Inferer | None) -> tuple[Tensor, dict[str, float]]:
-    logits = infer(model, x) if infer is not None else model(x)
-    row = {"loss": float(loss_fn(logits, y))}
+def _logits(model: nn.Module, x: Tensor, infer: Inferer | None) -> Tensor:
+    return infer(model, x) if infer is not None else model(x)
+
+
+@torch.no_grad()
+def _row(logits: Tensor, y: Tensor, loss_fn: Any | None, metrics: Sequence[Metric]) -> dict[str, float]:
+    row = {"loss": float(loss_fn(logits, y))} if loss_fn is not None else {}
     for metric in metrics:
         for key, values in metric(logits, y).items():
             if key in row:
                 raise PredictError(f"two metrics both produce {key!r}")
             row[key] = float(values[0])
-    return logits, row
+    return row
 
 
 def mean_metrics(rows: Sequence[CaseResult]) -> dict[str, float]:
@@ -211,29 +326,42 @@ def _members_line(r: PredictionRecord) -> str:
     )
 
 
+def _what(r: PredictionRecord) -> str:
+    if r.kind == "ensemble":
+        return f"ensemble ({r.method.get('vote')} vote)"
+    return r.kind
+
+
+def _metric_cells(metrics: dict[str, float]) -> str:
+    return "  ".join(f"{k}={format_number(v)}" for k, v in metrics.items())
+
+
 def prediction_lines(r: PredictionRecord) -> list[str]:
-    """What `mlops predict` prints."""
-    out = [
-        f"{r.name}: predicted {r.part} ({len(r.cases)} case{'s' if len(r.cases) != 1 else ''})",
-        f"  result_id  {r.result_id}",
-        f"  run        {_members_line(r)}",
-        "  " + "  ".join(f"{k}={format_number(v)}" for k, v in r.metrics.items()),
-    ]
+    """What `mlops predict` / `mlops ensemble` print."""
+    n = f"{len(r.cases)} case{'s' if len(r.cases) != 1 else ''}"
+    if r.kind == "ensemble":
+        head = f"{r.name}: {_what(r)} of {len(r.members)} runs on {r.part} ({n})"
+    else:
+        head = f"{r.name}: predicted {r.part} ({n})"
+    out = [head, f"  result_id  {r.result_id}", f"  run{'s' if len(r.members) > 1 else ' '}       {_members_line(r)}",
+           f"  {_metric_cells(r.metrics)}"]
+    if r.member_metrics:
+        out.append("  each run alone:")
+        out += [f"    {run[:12]}  {_metric_cells(m)}" for run, m in r.member_metrics.items()]
     out += [f"  note: {n}" for n in r.notes]
     return out
 
 
 def result_line(r: PredictionRecord) -> str:
     """One line of `mlops results`."""
-    metrics = "  ".join(f"{k}={format_number(v)}" for k, v in r.metrics.items())
-    return f"{r.result_id[:12]}  {r.name}  {r.kind} {r.part} ({len(r.cases)})  {_members_line(r)}  {metrics}"
+    return f"{r.result_id[:12]}  {r.name}  {_what(r)} {r.part} ({len(r.cases)})  {_members_line(r)}  {_metric_cells(r.metrics)}"
 
 
 def render_prediction_report(r: PredictionRecord) -> str:
     """``report.md`` of a result: a pure function of the record."""
     keys = list(r.metrics)
     lines = [
-        f"# {r.name} — {r.kind} on {r.part}",
+        f"# {r.name} — {_what(r)} on {r.part}",
         "",
         "| field | value |",
         "|---|---|",
@@ -247,6 +375,12 @@ def render_prediction_report(r: PredictionRecord) -> str:
         lines += ["", f"> {n}"]
     lines += ["", "## Mean over cases", "", "| metric | mean |", "|---|---|"]
     lines += [f"| {k} | {_cell(r.metrics[k])} |" for k in keys]
+    if r.member_metrics:
+        member_keys = list(next(iter(r.member_metrics.values())))
+        lines += ["", "## Each run alone", "", "Same cases, each run's own prediction: did the vote help?", "",
+                  "| run | " + " | ".join(member_keys) + " |", "|---|" + "---|" * len(member_keys)]
+        lines += [f"| {run[:12]} | " + " | ".join(_cell(m.get(k, math.nan)) for k in member_keys) + " |"
+                  for run, m in r.member_metrics.items()]
     lines += ["", "## Per case", "", "| case | " + " | ".join(keys) + " |", "|---|" + "---|" * len(keys)]
     lines += [f"| {c.case} | " + " | ".join(_cell(c.metrics.get(k, math.nan)) for k in keys) + " |" for c in r.cases]
     return "\n".join(lines) + "\n"

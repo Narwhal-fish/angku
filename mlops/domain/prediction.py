@@ -20,6 +20,8 @@ RESULT_FORMAT = 1
 
 Weights = Literal["model.pt", "best.pt"]
 Part = Literal["val", "test"]
+Kind = Literal["predict", "ensemble"]
+Vote = Literal["soft", "hard"]
 
 
 class _Frozen(BaseModel):
@@ -45,7 +47,7 @@ class CaseResult(_Frozen):
 class PredictionRecord(_Frozen):
     result_id: str
     format: int = RESULT_FORMAT
-    kind: Literal["predict"] = "predict"
+    kind: Kind = "predict"
     name: str  # meta.name of the (first) member's spec, for humans only
     members: list[Member]
     part: Part
@@ -56,6 +58,8 @@ class PredictionRecord(_Frozen):
     cases: list[CaseResult]
     # Mean over the cases where each metric is defined (NaN if none).
     metrics: dict[str, float]
+    # ensemble only: each member's own means on the same cases, by run_id (did voting help?)
+    member_metrics: dict[str, dict[str, float]] = Field(default_factory=dict)
     environment: EnvironmentRecord | None = None
     # Caveats a reader must see next to the numbers (e.g. val was used for model selection).
     notes: list[str] = Field(default_factory=list)

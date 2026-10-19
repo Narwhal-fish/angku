@@ -189,6 +189,18 @@ was used during training, so those numbers look better than they really are. Add
 `--save-predictions` to also keep each case's predicted labels. `mlops results --artifacts runs`
 lists everything you have evaluated.
 
+### Combine several models
+
+```bash
+mlops ensemble <run_a> <run_b> <run_c> --artifacts runs --vote soft
+```
+
+`--vote soft` averages the models' probabilities; `--vote hard` lets each model vote for a label
+and takes the majority. The runs must be measured the same way (same data, preprocessing, loss,
+metrics and test cases); the models themselves may differ. The output shows the combined result
+next to each model on its own, so you can see whether combining helped. The k folds of a k-fold
+experiment make a natural ensemble: they share the same test cases.
+
 ## Commands
 
 | Command | What it does |
@@ -200,6 +212,7 @@ lists everything you have evaluated.
 | `mlops report <run_id>` | Write the readable report of a run |
 | `mlops diff <run_a> <run_b>` | Explain why two runs differ |
 | `mlops predict <run_id>` | Evaluate a finished run's model on its test cases |
+| `mlops ensemble <run_id>...` | Combine several runs' predictions by voting |
 | `mlops results` | List your prediction results |
 | `mlops ui` | Browse your runs in the terminal |
 | `mlops id <yaml>` | Show an experiment's id without running it |
