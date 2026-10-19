@@ -50,7 +50,15 @@ from mlops.application.bundle import (
     save_launch,
     save_spec,
 )
-from mlops.application.runner import RunnerError, RunResult, Worker, resumed_criterion, train_worker, verify_data
+from mlops.application.runner import (
+    RunnerError,
+    RunResult,
+    Worker,
+    resolve_split,
+    resumed_criterion,
+    train_worker,
+    verify_data,
+)
 from mlops.domain.best import BestCriterion, best_record
 from mlops.domain.environment import EnvCheck, EnvironmentRecord, record_environment
 from mlops.domain.experiment import ExperimentSpec
@@ -293,6 +301,7 @@ class RayLauncher:
 
         # Wrong data must not even start a run (as with the local runner); ranks re-check what they read.
         verify_data(spec, data)
+        assignment = resolve_split(spec, data)  # the ranks split the same cases the same way
         if checkpoint_every:
             assert artifacts is not None
             # A killed driver never reaches save_bundle; `mlops resume` needs these to come back.
@@ -340,6 +349,7 @@ class RayLauncher:
                 status=status, device=dev, history=history, environment=environment,
                 data_snapshot=data_snapshot, resumes=resumes,
                 best=best_record(history, keep_best) if keep_best is not None and status == "FINISHED" else None,
+                split=assignment.counts() if assignment is not None else None,
             )
 
         def _take_start_info(info: dict[str, Any] | None) -> None:
@@ -375,21 +385,22 @@ class RayLauncher:
             _take_start_info(relay.start_info)
             tracker.end_run("FAILED")
             if artifacts is not None:
-                save_bundle(artifacts, spec=spec, manifest=_manifest("FAILED"), model_state=None)
+                save_bundle(artifacts, spec=spec, manifest=_manifest("FAILED"), model_state=None,
+                            split=assignment)
             raise
         finally:
             metrics_queue.shutdown()
         tracker.end_run("FINISHED")
         if artifacts is not None:
             save_bundle(artifacts, spec=spec, manifest=_manifest("FINISHED"), model_state=state,
-                        best_state=best_state)
+                        best_state=best_state, split=assignment)
         if not keep_checkpoint:
             # Ray's copies (latest checkpoint + final weights) are dead weight once model.pt is
             # written: nothing left to resume. Through Ray's filesystem, so s3:// storage works too.
             result.filesystem.delete_dir(result.path)
         return RunResult(
             experiment_id=experiment_id, run_id=run_id, device=dev, history=history,
-            environment=environment, data_snapshot=data_snapshot, resumes=resumes,
+            environment=environment, data_snapshot=data_snapshot, resumes=resumes, split=assignment,
         )
 
 

@@ -16,6 +16,7 @@ from torch import Tensor
 from torch.utils.data import Dataset as TorchDataset
 
 from mlops.domain.experiment import Dataset
+from mlops.domain.split import SplitAssignment
 
 # One training example: (inputs, targets). Batching stacks each side.
 Sample = tuple[Tensor, Tensor]
@@ -29,6 +30,8 @@ class DataError(Exception):
 class DataSplits:
     train: TorchDataset[Sample]
     val: TorchDataset[Sample] | None = None
+    # Only with ``spec.split`` asking for one. Training never reads it: it is for ``predict``.
+    test: TorchDataset[Sample] | None = None
 
 
 class DataProvider(Protocol):
@@ -37,8 +40,17 @@ class DataProvider(Protocol):
         provider cannot attest to its data. Independent of where the files live."""
         ...
 
-    def load(self, dataset: Dataset, preprocessing: dict[str, Any]) -> DataSplits:
-        """Return the splits for ``dataset`` at its pinned snapshot.
+    def cases(self, dataset: Dataset) -> list[str]:
+        """Stable ids of every case ``load`` can serve (needed only for ``spec.split``; a provider
+        without this method serves its own split and refuses a spec that sets one)."""
+        ...
+
+    def load(
+        self, dataset: Dataset, preprocessing: dict[str, Any], split: SplitAssignment | None = None
+    ) -> DataSplits:
+        """Return the splits for ``dataset`` at its pinned snapshot: the cases ``split`` names
+        (ids from ``cases``) or, when None, the provider's own split. Called with ``split`` only
+        when the spec sets one.
 
         Must raise ``DataError`` if it does not serve ``dataset.name`` or the
         snapshot is unavailable, rather than silently substituting other data.

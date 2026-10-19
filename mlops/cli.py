@@ -74,7 +74,7 @@ from mlops.application.runner import RunResult, verify_data
 from mlops.application.diff import RunDiff, diff_lines, diff_runs, format_value
 from mlops.application.listing import ExperimentGroup, group_by_experiment, list_runs
 from mlops.application.progress import PROGRESS, is_live, read_progress
-from mlops.application.report import render_report, write_report
+from mlops.application.report import render_report, split_counts, split_rule, write_report
 from mlops.application.reproduce import ReproduceError, ReproduceReport, reproduce_lines, reproduce_run
 from mlops.config import ConfigError, load_experiment_yaml
 from mlops.domain import ExperimentSpec, RunManifest, UnpinnedInputError, compute_experiment_id, compute_run_id
@@ -264,6 +264,7 @@ def _launch_and_report(
         "device": result.device,
         "launcher": getattr(args, "launcher", "local"),
         "resumed_from_epoch": result.resumes[-1].epoch if result.resumes else None,
+        "split": result.split.counts() if result.split is not None else None,
         "history": result.history,
         "artifacts": str(Path(args.artifacts) / result.run_id) if args.artifacts else None,
     }
@@ -280,6 +281,8 @@ def _print_summary(spec: ExperimentSpec, s: dict[str, Any]) -> None:
     print(f"  run_id         {s['run_id']}  (attempt {s['attempt']}, {s['device']}, launcher {s['launcher']})")
     if s["resumed_from_epoch"] is not None:
         print(f"  resumed after epoch {s['resumed_from_epoch']} from checkpoint.pt")
+    if s["split"] is not None:
+        print(f"  split          {split_counts(s['split'])}  ({split_rule(spec.split)})")
     for epoch, metrics in enumerate(s["history"], start=1):
         cells = "  ".join(f"{k}={v:.4f}" for k, v in metrics.items())
         print(f"  epoch {epoch:>3}  {cells}")

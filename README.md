@@ -130,6 +130,31 @@ A misspelled setting (`chanels: 16`) is an error, not silently ignored. Losses, 
 metrics and datasets work the same way; `experiments/` has working examples of each, and
 `experiments/configs/swinunetr_baseline.yaml` is a full medical imaging setup.
 
+### Choose how the data is split
+
+By default each dataset uses its own train/validation split. To choose it yourself, add a
+`split` section:
+
+```yaml
+split:
+  kind: holdout      # or kfold
+  val: 0.2           # share of cases for validation
+  test: 0.15         # optional: cases kept out of training and model selection entirely
+```
+
+or, for cross-validation, one experiment per fold:
+
+```yaml
+split:
+  kind: kfold
+  k: 5
+  fold: 0            # 0 to 4; run each fold as its own experiment
+```
+
+Cases are shuffled with a fixed seed (`seed: 0`, separate from the training seed), so the same
+YAML always gives the same split. Every run saves which case went where in `split.json`, and
+`mlops diff` lists the cases that moved between two runs.
+
 To pin your data, run `mlops snapshot <yaml> --data-root DIR` and put the printed hash in the
 YAML's `dataset.snapshot`.
 
@@ -141,6 +166,7 @@ runs/<run_id>/
   manifest.json    ids, status, metrics per epoch, environment, data check
   model.pt         the trained weights
   best.pt          the weights of the best epoch (with --keep-best)
+  split.json       which case was in train, validation and test (with a `split` section)
   checkpoint.pt    the latest checkpoint (with --checkpoint-every; removed once the run finishes)
   report.md        a readable summary of all of the above
 ```

@@ -88,6 +88,19 @@ def test_ray_keep_best_matches_the_local_run(launcher):
         assert torch.allclose(v, b.best_state[k], atol=1e-6, rtol=0), k
 
 
+def test_ray_run_applies_and_records_the_spec_split(launcher):
+    d = _spec(workers=1).model_dump()
+    d["split"] = {"kind": "holdout", "val": 0.34, "test": 0.17}
+    spec = load_experiment_dict(d)
+    local_store, ray_store = InMemoryArtifactStore(), InMemoryArtifactStore()
+    local = run_experiment(spec, data=_data(), tracker=InMemoryTracker(), artifacts=local_store)
+    result = launcher.launch(spec, data=_data(), tracker=InMemoryTracker(), artifacts=ray_store)
+    assert result.split == local.split and result.split.counts() == {"train": 3, "val": 2, "test": 1}
+    assert result.history == local.history
+    bundle = load_bundle(ray_store, result.run_id)
+    assert bundle.split == local.split and bundle.manifest.split == local.split.counts()
+
+
 def test_two_cpu_workers_split_the_global_batch(launcher):
     spec = _spec(workers=2, **{"training.epochs": 2})
     assert spec.per_worker_batch_size() == 1

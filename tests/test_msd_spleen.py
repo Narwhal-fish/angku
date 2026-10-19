@@ -32,6 +32,7 @@ from mlops.application import run_experiment  # noqa: E402
 from mlops.cli import main  # noqa: E402
 from mlops.config import load_experiment_yaml  # noqa: E402
 from mlops.domain.experiment import Dataset  # noqa: E402
+from mlops.domain.split import SplitAssignment  # noqa: E402
 from mlops.ports.data import DataError  # noqa: E402
 from mlops.registry import DATASETS, RegistryError, discover  # noqa: E402
 
@@ -127,6 +128,42 @@ def test_last_num_val_cases_by_name_are_validation(provider):
     assert len(splits.train) == 2 and len(splits.val) == 2
     assert [c.name for c in splits.train.cases] == ["spleen_0", "spleen_1"]
     assert [c.name for c in splits.val.cases] == ["spleen_2", "spleen_3"]
+
+
+
+# Without num_val: with `split` the platform chooses val.
+NO_NUM_VAL = {k: v for k, v in PRE.items() if k != "num_val"}
+
+
+def test_cases_are_image_names_without_extension(provider):
+    assert provider.cases(_ds()) == ["spleen_0", "spleen_1", "spleen_2", "spleen_3"]
+
+
+def test_spec_split_picks_the_cases_and_serves_test_like_val(provider):
+    split = SplitAssignment(train=["spleen_1", "spleen_3"], val=["spleen_0"], test=["spleen_2"])
+    splits = provider.load(_ds(), NO_NUM_VAL, split=split)
+    assert [c.name for c in splits.train.cases] == ["spleen_1", "spleen_3"]
+    assert [c.name for c in splits.val.cases] == ["spleen_0"]
+    assert [c.name for c in splits.test.cases] == ["spleen_2"]
+    assert type(splits.test) is type(splits.val)
+    full = provider.load(_ds(), {**NO_NUM_VAL, "val": "full_volume"}, split=split)
+    assert type(full.test).__name__ == "FullVolumes"
+
+
+def test_spec_split_without_test_serves_none(provider):
+    splits = provider.load(_ds(), NO_NUM_VAL, split=SplitAssignment(train=["spleen_0", "spleen_1"], val=["spleen_2", "spleen_3"]))
+    assert splits.test is None
+
+
+def test_spec_split_and_num_val_together_are_refused(provider):
+    split = SplitAssignment(train=["spleen_0", "spleen_1"], val=["spleen_2"], test=["spleen_3"])
+    with pytest.raises(DataError, match="num_val"):
+        provider.load(_ds(), {**PRE, "num_val": 1}, split=split)
+
+
+def test_spec_split_naming_an_unknown_case_is_refused(provider):
+    with pytest.raises(DataError, match="spleen_9"):
+        provider.load(_ds(), NO_NUM_VAL, split=SplitAssignment(train=["spleen_9"], val=["spleen_0"]))
 
 
 # --- samples ---

@@ -14,6 +14,7 @@ Sections, in order of how much they matter for identity:
     history      where the curves split: the first epoch whose metrics differ (exact, NaN == NaN,
                  or within ``atol``) and the values there; compared over the common epochs
     best         the keep-best records (``manifest.best``)
+    split        cases that sit in a different part (``split.json``; only when both runs have one)
 
 Nested dicts and lists of sections (augmentation, metrics) are flattened to dotted paths
 (``augmentation.0.params.prob``); a list of scalars is one value. A path present on one side
@@ -27,10 +28,11 @@ import math
 from dataclasses import dataclass, field
 from typing import Any
 
-from mlops.application.bundle import MANIFEST, SPEC
+from mlops.application.bundle import MANIFEST, SPEC, SPLIT
 from mlops.domain.experiment import ExperimentSpec
 from mlops.domain.identity import compute_experiment_id
 from mlops.domain.manifest import RunManifest
+from mlops.domain.split import SplitAssignment
 from mlops.ports.artifacts import ArtifactError, ArtifactStore
 
 
@@ -101,6 +103,18 @@ class HistoryDiff:
 
 
 @dataclass(frozen=True)
+class SplitChange:
+    """Cases of one part (train / val / test) that only one of the runs has there."""
+
+    part: str
+    only_a: list[str]
+    only_b: list[str]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"part": self.part, "only_a": self.only_a, "only_b": self.only_b}
+
+
+@dataclass(frozen=True)
 class RunDiff:
     run_a: str
     run_b: str
@@ -117,6 +131,7 @@ class RunDiff:
     metrics: list[MetricPair] = field(default_factory=list)
     history: HistoryDiff | None = None  # None when either run has no manifest
     best: list[Change] = field(default_factory=list)
+    split: list[SplitChange] = field(default_factory=list)
 
     @property
     def same_experiment(self) -> bool:
@@ -143,6 +158,7 @@ class RunDiff:
             "metrics": [m.to_dict() for m in self.metrics],
             "history": self.history.to_dict() if self.history is not None else None,
             "best": [c.to_dict() for c in self.best],
+            "split": [c.to_dict() for c in self.split],
         }
 
 
@@ -179,6 +195,7 @@ def diff_runs(
         metrics=_metrics(man_a, man_b),
         history=_history(man_a, man_b, atol) if man_a and man_b else None,
         best=_changes(_flatten(_best(man_a)), _flatten(_best(man_b))),
+        split=_split(_read_split(store_a, run_a), _read_split(store_b, run_b)),
     )
 
 
@@ -192,6 +209,24 @@ def _read(store: ArtifactStore, run_id: str) -> tuple[ExperimentSpec, RunManifes
     except ArtifactError:  # killed before any manifest was written
         manifest = None
     return spec, manifest
+
+
+def _read_split(store: ArtifactStore, run_id: str) -> SplitAssignment | None:
+    try:
+        return SplitAssignment.model_validate_json(store.get(run_id, SPLIT))
+    except ArtifactError:
+        return None
+
+
+def _split(a: SplitAssignment | None, b: SplitAssignment | None) -> list[SplitChange]:
+    if a is None or b is None:
+        return []
+    out = []
+    for part in ("train", "val", "test"):
+        pa, pb = set(getattr(a, part)), set(getattr(b, part))
+        if pa != pb:
+            out.append(SplitChange(part, sorted(pa - pb), sorted(pb - pa)))
+    return out
 
 
 def _labels(spec: ExperimentSpec) -> dict[str, Any]:
@@ -320,6 +355,22 @@ def history_lines(h: HistoryDiff | None) -> list[str]:
     ]
 
 
+def split_lines(changes: list[SplitChange], *, show: int = 5) -> list[str]:
+    if not changes:
+        return []
+
+    def cases(ids: list[str]) -> str:
+        more = f" (+{len(ids) - show} more)" if len(ids) > show else ""
+        return (", ".join(ids[:show]) or "-") + more
+
+    width = max(len(c.part) for c in changes)
+    out = ["split (cases in a different part):"]
+    for c in changes:
+        out.append(f"  {c.part:<{width}}  only a: {cases(c.only_a)}")
+        out.append(f"  {'':<{width}}  only b: {cases(c.only_b)}")
+    return out
+
+
 def diff_lines(d: RunDiff) -> list[str]:
     def side(run: str, attempt: int | None, status: str) -> str:
         return f"{run[:12]} (attempt {attempt if attempt is not None else '?'}, {status})"
@@ -335,6 +386,7 @@ def diff_lines(d: RunDiff) -> list[str]:
     out += change_lines("environment (what each run ran on):", d.environment)
     out += history_lines(d.history)
     out += change_lines("best (keep-best):", d.best)
+    out += split_lines(d.split)
     if d.metrics:
         out.append("final metrics:")
         width = max(len(m.name) for m in d.metrics)

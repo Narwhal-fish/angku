@@ -19,6 +19,7 @@ from typing import Any
 from mlops.application.bundle import Bundle, load_bundle
 from mlops.domain.best import BestRecord
 from mlops.domain.environment import EnvironmentRecord
+from mlops.domain.experiment import Split
 from mlops.domain.manifest import ResumePoint, RunManifest
 from mlops.ports.artifacts import ArtifactStore
 
@@ -70,9 +71,27 @@ def _header(b: Bundle) -> str:
         rows.append(("resumed", ", ".join(_resume_point(r) for r in m.resumes)))
     if m.best is not None:
         rows.append(("best", _best(m.best)))
+    if m.split is not None:
+        rows.append(("split", split_counts(m.split) + ", cases in `split.json`"))
     rows.append(("environment", _env_verdict(b)))
     rows.append(("data", _data_verdict(b)))
     return "\n".join(lines) + "\n" + _table(("field", "value"), rows)
+
+
+def split_rule(split: Split | None) -> str:
+    """How ``spec.split`` cuts the cases, in one line."""
+    if split is None:
+        return "the data provider's own split"
+    order = f"shuffled (seed {split.seed})" if split.order == "shuffled" else "sorted by case id"
+    test = f", test {format_number(split.test)}" if split.test else ""
+    if split.kind == "holdout":
+        return f"holdout: val {format_number(split.val or 0)}{test}, {order}"
+    return f"{split.k}-fold, fold {split.fold}{test}, {order}"
+
+
+def split_counts(counts: dict[str, int]) -> str:
+    """``manifest.split`` as ``train 27, val 8, test 6`` (test only when there is one)."""
+    return ", ".join(f"{part} {n}" for part, n in counts.items() if n or part != "test")
 
 
 def _best(best: BestRecord) -> str:
@@ -147,6 +166,7 @@ def _experiment(b: Bundle) -> str:
             if s.inference is not None
             else ("inference", "model(x) on each val batch")
         ),
+        ("split", split_rule(s.split)),
         ("optimizer", t.optimizer),
         ("learning_rate", format_number(t.learning_rate)),
         ("epochs", str(t.epochs)),

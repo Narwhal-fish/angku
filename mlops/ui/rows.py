@@ -19,6 +19,8 @@ from mlops.application.report import (
     metric_names,
     record_verdict,
     sparkline,
+    split_counts,
+    split_rule,
 )
 from mlops.application.runner import RunResult
 from mlops.domain.experiment import ExperimentSpec
@@ -94,6 +96,9 @@ def overview_rows(s: RunSummary, *, spec: ExperimentSpec | None, manifest: RunMa
         b = s.best
         rows.append(("best", f"{b.metric} ({b.mode}) never defined" if b.epoch is None
                      else f"{b.metric} ({b.mode}) = {format_number(b.value)} at epoch {b.epoch}"))
+    if spec is not None and spec.split is not None:
+        counts = f"{split_counts(manifest.split)}; " if manifest is not None and manifest.split else ""
+        rows.append(("split", counts + split_rule(spec.split)))
     if manifest is not None:
         rows += [("environment", record_verdict(manifest.environment)), ("data", data_verdict(manifest))]
     else:

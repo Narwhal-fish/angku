@@ -12,7 +12,7 @@ preprocessing, augmentation params) are free-form dicts; their *structure*
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -127,6 +127,52 @@ class Inference(_Strict):
     params: dict[str, Any] = Field(default_factory=dict)
 
 
+class Split(_Strict):
+    """How the dataset's cases are split (``mlops.domain.split.assign_split``). Optional: a spec
+    without it keeps the provider's own split, so ids from before the field existed hold.
+
+    ``holdout``: ``val`` (+ ``test``) as fractions of all cases. ``kfold``: ``test`` is taken out
+    first, the rest is cut into ``k`` folds and fold ``fold`` is val; each fold is its own
+    experiment. Defaults are filled in here, so ``spec.json`` and the fingerprint always carry
+    the values actually used. ``seed`` orders the cases for ``shuffled``; it is not
+    ``training.seed`` (another training seed must not move cases into the test set).
+    """
+
+    kind: Literal["holdout", "kfold"] = "holdout"
+    val: float | None = None
+    test: float = 0.0
+    k: int | None = None
+    fold: int | None = None
+    order: Literal["shuffled", "sorted"] = "shuffled"
+    seed: int = 0
+
+    @model_validator(mode="after")
+    def _fields_fit_the_kind(self) -> Split:
+        if not 0.0 <= self.test < 1.0:
+            raise ValueError(f"split.test must be in [0, 1), got {self.test}")
+        if self.kind == "holdout":
+            if self.k is not None or self.fold is not None:
+                raise ValueError("split.k and split.fold are for kind: kfold")
+            val = 0.2 if self.val is None else self.val
+            if not 0.0 < val < 1.0:
+                raise ValueError(f"split.val must be in (0, 1), got {val}")
+            if val + self.test >= 1.0:
+                raise ValueError(f"split.val + split.test must leave training cases, got {val} + {self.test}")
+            object.__setattr__(self, "val", val)
+        else:
+            if self.val is not None:
+                raise ValueError("split.val is for kind: holdout (kfold uses k and fold)")
+            k = 5 if self.k is None else self.k
+            if k < 2:
+                raise ValueError(f"split.k must be >= 2, got {k}")
+            if self.fold is None:
+                raise ValueError(f"split.fold is required for kind: kfold (0..{k - 1}); each fold is its own experiment")
+            if not 0 <= self.fold < k:
+                raise ValueError(f"split.fold must be in 0..{k - 1}, got {self.fold}")
+            object.__setattr__(self, "k", k)
+        return self
+
+
 class Resources(_Strict):
     """Hardware allocation. Part of RunID only, never ExperimentID.
 
@@ -165,6 +211,9 @@ class ExperimentSpec(_Strict):
     # How the model is applied to a validation volume (e.g. sliding window). None = model(x).
     # Shapes val/loss and the metrics, so it is in the fingerprint (when present).
     inference: Inference | None = None
+    # Which cases are train / val / test. None = the provider's own split. In the fingerprint
+    # (when present): it decides what the model sees.
+    split: Split | None = None
     resources: Resources
     tracking: Tracking = Field(default_factory=Tracking)
 
@@ -198,7 +247,7 @@ class ExperimentSpec(_Strict):
         """The exact subset of the spec that defines the scientific experiment.
 
         Includes: code commit, image digest, dataset name+snapshot, preprocessing,
-        model, training (incl. seed), augmentation, loss, metrics and inference (each only
+        model, training (incl. seed), augmentation, loss, metrics, inference and split (each only
         when set, so ids from before those fields existed are unchanged).
         Excludes: meta, image tag, dataset version label, resources, tracking.
         """
@@ -216,4 +265,6 @@ class ExperimentSpec(_Strict):
             fp["metrics"] = [m.model_dump() for m in self.metrics]
         if self.inference is not None:
             fp["inference"] = self.inference.model_dump()
+        if self.split is not None:
+            fp["split"] = self.split.model_dump()
         return fp

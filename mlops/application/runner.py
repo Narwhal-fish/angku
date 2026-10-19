@@ -46,8 +46,9 @@ from mlops.domain.environment import EnvCheck, EnvironmentRecord, check_snapshot
 from mlops.domain.experiment import ExperimentSpec, Resources, Training
 from mlops.domain.identity import compute_experiment_id, compute_run_id
 from mlops.domain.manifest import ResumePoint, RunManifest
+from mlops.domain.split import SplitAssignment, SplitError, assign_split
 from mlops.ports.artifacts import ArtifactError, ArtifactStore
-from mlops.ports.data import DataError, DataProvider, Sample
+from mlops.ports.data import DataError, DataProvider, DataSplits, Sample
 from mlops.ports.environment import EnvironmentProbe
 from mlops.ports.tracking import RunStatus, Tracker
 from mlops.registry import AUGMENTATIONS, INFERERS, LOSSES, METRICS, MODELS
@@ -80,6 +81,7 @@ class RunResult:
     environment: EnvironmentRecord | None = None
     data_snapshot: EnvCheck | None = None
     resumes: list[ResumePoint] = field(default_factory=list)
+    split: SplitAssignment | None = None
 
     @property
     def final_metrics(self) -> dict[str, float]:
@@ -347,6 +349,7 @@ def train_worker(
     data_check = verify_data(spec, data)
     if on_data is not None:
         on_data(data_check)
+    assignment = resolve_split(spec, data)
 
     # Everything that touches RNG happens after this line. Every rank builds the
     # identical model; DDP would broadcast rank 0's weights anyway.
@@ -368,7 +371,8 @@ def train_worker(
         optimizer.load_state_dict(resume_from.optimizer_state)
     trained = wrap_model(model) if wrap_model is not None else model
 
-    splits = data.load(spec.dataset, spec.preprocessing)
+    # splits.test is never read here: neither training nor keep-best may see it.
+    splits = load_splits(spec, data, assignment)
     if metrics and splits.val is None:
         raise RunnerError(
             f"metrics need a validation split, but {spec.dataset.name!r} served none; "
@@ -434,6 +438,29 @@ def verify_data(spec: ExperimentSpec, data: DataProvider) -> EnvCheck:
     return check
 
 
+def resolve_split(spec: ExperimentSpec, data: DataProvider) -> SplitAssignment | None:
+    """``spec.split`` applied to the provider's cases; None when the spec sets no split.
+    A provider that cannot list cases, or cases that cannot be split as asked -> ``DataError``."""
+    if spec.split is None:
+        return None
+    cases = getattr(data, "cases", None)
+    if cases is None:
+        raise DataError(
+            f"{type(data).__name__} cannot list its cases, so it cannot apply `split`; "
+            "drop `split` from the spec to use the provider's own split"
+        )
+    try:
+        return assign_split(cases(spec.dataset), spec.split)
+    except SplitError as e:
+        raise DataError(f"split: {e}") from e
+
+
+def load_splits(spec: ExperimentSpec, data: DataProvider, assignment: SplitAssignment | None) -> DataSplits:
+    if assignment is None:
+        return data.load(spec.dataset, spec.preprocessing)
+    return data.load(spec.dataset, spec.preprocessing, split=assignment)
+
+
 # -- use case ------------------------------------------------------------------
 
 
@@ -477,6 +504,7 @@ def run_experiment(
         raise RunnerError("resume needs an artifact store holding the run's checkpoint.pt")
     ckpt = _resume_point(artifacts, run_id, experiment_id) if resume else None
     dev = resolve_device(spec.resources, device)
+    assignment = resolve_split(spec, data)  # what the worker will split too: same function, same cases
     segment_env = record_environment(spec, probe.capture(spec)) if probe is not None else None
 
     if ckpt is None:
@@ -501,6 +529,7 @@ def run_experiment(
             data_snapshot=data_snapshot,
             resumes=resumes,
             best=best_record(history, keep_best) if keep_best is not None and status == "FINISHED" else None,
+            split=assignment.counts() if assignment is not None else None,
         )
 
     data_snapshot: EnvCheck | None = None
@@ -540,18 +569,19 @@ def run_experiment(
         if started:
             tracker.end_run("FAILED")
             if artifacts is not None:
-                save_bundle(artifacts, spec=spec, manifest=_manifest("FAILED"), model_state=None)
+                save_bundle(artifacts, spec=spec, manifest=_manifest("FAILED"), model_state=None,
+                            split=assignment)
         raise
     tracker.end_run("FINISHED")
     if artifacts is not None:
         save_bundle(artifacts, spec=spec, manifest=_manifest("FINISHED"), model_state=model.state_dict(),
-                    best_state=best_state)
+                    best_state=best_state, split=assignment)
         if not keep_checkpoint:  # after the FINISHED manifest landed: a crash in between only leaves it
             artifacts.delete(run_id, CHECKPOINT)
 
     return RunResult(
         experiment_id=experiment_id, run_id=run_id, device=str(dev), history=history,
-        environment=environment, data_snapshot=data_snapshot, resumes=resumes,
+        environment=environment, data_snapshot=data_snapshot, resumes=resumes, split=assignment,
     )
 
 

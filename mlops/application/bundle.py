@@ -6,6 +6,7 @@
     best.pt         ``state_dict`` of the best epoch (``manifest.best``), only with keep-best, FINISHED only
     checkpoint.pt   latest mid-run training state, only with ``checkpoint_every`` on the local
                     launcher: what ``resume`` continues from. Not evidence; a replay never reads it.
+    split.json      which case is in train / val / test (``SplitAssignment``), only with ``spec.split``
     launch.json     how a checkpointing Ray run was launched (attempt, Ray storage path): the
                     checkpoints themselves live in Ray's storage, this says where to resume from.
 
@@ -27,6 +28,7 @@ from mlops.domain.best import BestCriterion
 from mlops.domain.environment import EnvironmentRecord
 from mlops.domain.experiment import ExperimentSpec
 from mlops.domain.manifest import ResumePoint, RunManifest
+from mlops.domain.split import SplitAssignment
 from mlops.ports.artifacts import ArtifactStore
 
 SPEC = "spec.json"
@@ -35,6 +37,7 @@ MODEL = "model.pt"
 BEST = "best.pt"
 CHECKPOINT = "checkpoint.pt"
 LAUNCH = "launch.json"
+SPLIT = "split.json"
 _CHECKPOINT_FORMAT = 1
 
 
@@ -44,6 +47,7 @@ class Bundle:
     manifest: RunManifest
     model_state: dict[str, Any] | None
     best_state: dict[str, Any] | None = None
+    split: SplitAssignment | None = None
 
 
 def save_bundle(
@@ -53,9 +57,12 @@ def save_bundle(
     manifest: RunManifest,
     model_state: Mapping[str, Any] | None,
     best_state: Mapping[str, Any] | None = None,
+    split: SplitAssignment | None = None,
 ) -> None:
     run_id = manifest.run_id
     save_spec(store, run_id, spec)
+    if split is not None:
+        store.put(run_id, SPLIT, split.model_dump_json(indent=2).encode())
     # Weights before the manifest: a FINISHED manifest promises its files are there.
     for name, state in ((MODEL, model_state), (BEST, best_state)):
         if state is not None:
@@ -75,7 +82,8 @@ def load_bundle(store: ArtifactStore, run_id: str) -> Bundle:
             return None
         return torch.load(io.BytesIO(store.get(run_id, name)), map_location="cpu", weights_only=True)
 
-    return Bundle(spec=spec, manifest=manifest, model_state=weights(MODEL), best_state=weights(BEST))
+    split = SplitAssignment.model_validate_json(store.get(run_id, SPLIT)) if SPLIT in names else None
+    return Bundle(spec=spec, manifest=manifest, model_state=weights(MODEL), best_state=weights(BEST), split=split)
 
 
 def save_spec(store: ArtifactStore, run_id: str, spec: ExperimentSpec) -> None:

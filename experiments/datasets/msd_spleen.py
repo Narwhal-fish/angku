@@ -21,7 +21,9 @@ centred on the label centroid (cheap, but not the number anyone reports);
 shape and exceed the roi, so they need ``spec.inference`` (e.g. ``sliding_window``), which
 also makes the runner validate one volume at a time.
 
-Split: cases sorted by file name, the last ``num_val`` are validation.
+Split: with ``spec.split`` the platform decides (case id = image file name without
+``.nii.gz``; ``num_val`` must then be absent) and test is evaluated like val. Without it:
+cases sorted by file name, the last ``num_val`` are validation.
 
 ``snapshot`` = sha256 over the sorted (relative path, sha256 of file) of every image and
 label ``load`` reads. Location-independent; files it does not serve (imagesTs, stray files)
@@ -42,6 +44,7 @@ from torch import Tensor
 from torch.utils.data import Dataset as TorchDataset
 
 from mlops.domain.experiment import Dataset
+from mlops.domain.split import SplitAssignment
 from mlops.ports.data import DataError, DataSplits, Sample
 from mlops.registry import DATASETS, Params
 
@@ -94,7 +97,14 @@ class MsdSpleen:
                 h.update(f"{f.relative_to(self.task).as_posix()}\0{digest}\n".encode())
         return "sha256:" + h.hexdigest()
 
-    def load(self, dataset: Dataset, preprocessing: dict[str, Any]) -> DataSplits:
+    def cases(self, dataset: Dataset) -> list[str]:
+        if dataset.name != NAME:
+            raise DataError(f"MsdSpleen serves {NAME!r}, not {dataset.name!r}")
+        return [name for name, _, _ in self._list_cases()]
+
+    def load(
+        self, dataset: Dataset, preprocessing: dict[str, Any], split: SplitAssignment | None = None
+    ) -> DataSplits:
         if dataset.name != NAME:
             raise DataError(f"MsdSpleen serves {NAME!r}, not {dataset.name!r}")
         try:
@@ -105,6 +115,26 @@ class MsdSpleen:
             raise DataError("preprocessing.pos + preprocessing.neg must be > 0")
 
         pairs = self._list_cases()
+        if split is not None:
+            if "num_val" in preprocessing:
+                raise DataError("preprocessing.num_val and `split` both choose the val cases; drop num_val")
+            by_name = {name: (name, image, label) for name, image, label in pairs}
+            unknown = [c for c in split.train + split.val + split.test if c not in by_name]
+            if unknown:
+                raise DataError(f"{NAME}: no case(s) {', '.join(unknown[:5])} in {self.task}")
+            preprocessed = {c.name: c for c in _preprocess([by_name[c] for c in sorted(by_name)], p)}
+
+            def evaluated(ids: list[str]) -> TorchDataset[Sample] | None:
+                if not ids:
+                    return None
+                chosen = [preprocessed[c] for c in ids]
+                return CentredCrops(chosen, p.roi_size) if p.val == "centred_crop" else FullVolumes(chosen)
+
+            return DataSplits(
+                train=RandomCrops([preprocessed[c] for c in split.train], p.roi_size, pos=p.pos, neg=p.neg),
+                val=evaluated(split.val),
+                test=evaluated(split.test),
+            )
         if p.num_val >= len(pairs):
             raise DataError(f"num_val={p.num_val} leaves no training case ({len(pairs)} cases in {self.task})")
         cases = _preprocess(pairs, p)

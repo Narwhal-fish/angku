@@ -42,3 +42,6 @@ class RunManifest(BaseModel):
     resumes: list[ResumePoint] = Field(default_factory=list)
     # Run started with keep-best: which epoch best.pt holds (FINISHED only). None = not asked.
     best: BestRecord | None = None
+    # Cases per part ({"train": n, "val": n, "test": n}) when the spec sets `split`; which cases
+    # they are is in split.json. None = the provider's own split.
+    split: dict[str, int] | None = None
