@@ -276,3 +276,13 @@ scripts/kind-verify.sh   # train on it, stop a job halfway, resume it, check the
 mlops ui --artifacts .kind/artifacts --kubectl "kubectl --context kind-mlops"
 scripts/kind-down.sh     # remove the cluster when you are done
 ```
+
+## Tests
+
+```bash
+uv pip install -e ".[dev,medical]" --torch-backend=auto
+MLFLOW_DISABLE_AGENT_HINT=1 .venv/bin/python -m pytest -q
+```
+
+GitHub Actions runs them on every push and pull request, once with every extra installed and
+once with only the core.

@@ -20,12 +20,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import numpy as np
 import pytest
 import torch
 
 nib = pytest.importorskip("nibabel")
 pytest.importorskip("monai")
+
+import numpy as np  # noqa: E402  (comes with the medical extra)
 
 from mlops.adapters.inmemory_tracker import InMemoryTracker  # noqa: E402
 from mlops.application import run_experiment  # noqa: E402

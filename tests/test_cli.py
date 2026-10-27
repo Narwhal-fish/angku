@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -463,10 +464,12 @@ class _FakeRayLauncher:
 
 @pytest.fixture
 def fake_ray(monkeypatch):
-    import mlops.adapters.ray_launcher as rl
-
+    # A stand-in module instead of patching the real one: these tests are about the CLI
+    # wiring, so they also run without the distributed extra (the core-only CI job).
+    module = types.ModuleType("mlops.adapters.ray_launcher")
+    module.RayLauncher = _FakeRayLauncher
     _FakeRayLauncher.made, _FakeRayLauncher.launched = [], []
-    monkeypatch.setattr(rl, "RayLauncher", _FakeRayLauncher)
+    monkeypatch.setitem(sys.modules, "mlops.adapters.ray_launcher", module)
     return _FakeRayLauncher
 
 

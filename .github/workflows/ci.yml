@@ -1,0 +1,62 @@
+# Tests on every push to master and every pull request. CPU only: the GPU, real-data and
+# real-cluster checks are tracked in GitHub issues.
+name: ci
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  MLFLOW_DISABLE_AGENT_HINT: "1"
+
+jobs:
+  # Everything installed (dev = mlflow + ray[train] + textual, plus medical = MONAI): every test
+  # must run, so a skip here means an extra failed to import and fails the job.
+  full:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0  # the environment probe diffs the tree against pinned commits
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: pyproject.toml
+      - run: uv venv --python 3.12
+      - run: uv pip install -e ".[dev,medical]" --torch-backend=cpu
+      - run: .venv/bin/python -m pytest -q --junitxml=pytest.xml
+      - name: No test skipped
+        run: |
+          .venv/bin/python - <<'EOF'
+          import sys, xml.etree.ElementTree as ET
+          suite = ET.parse("pytest.xml").getroot().find("testsuite")
+          skipped = int(suite.get("skipped"))
+          if skipped:
+              sys.exit(f"{skipped} test(s) skipped although every extra is installed")
+          EOF
+
+  # Only the core dependencies: the core must import none of the extras, and tests needing one
+  # must skip instead of erroring.
+  core:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: pyproject.toml
+      - run: uv venv --python 3.12
+      - run: uv pip install -e . pytest --torch-backend=cpu
+      - run: .venv/bin/python -m pytest -q
