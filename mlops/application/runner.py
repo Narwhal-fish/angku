@@ -524,6 +524,7 @@ def run_experiment(
             attempt=attempt,
             status=status,
             device=str(dev),
+            launcher="local",
             history=history,
             environment=environment,
             data_snapshot=data_snapshot,

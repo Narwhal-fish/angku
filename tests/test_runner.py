@@ -374,6 +374,16 @@ def test_manifest_written_before_environment_records_still_loads():
 
     old = '{"experiment_id": "e", "run_id": "r", "attempt": 1, "status": "FINISHED", "device": "cpu", "history": []}'
     assert RunManifest.model_validate_json(old).environment is None
+    assert RunManifest.model_validate_json(old).launcher is None
+
+
+def test_manifest_records_the_local_launcher(spec):
+    from mlops.adapters.inmemory_artifacts import InMemoryArtifactStore
+    from mlops.application.bundle import load_bundle
+
+    store = InMemoryArtifactStore()
+    r = run_experiment(spec, data=_data(), tracker=InMemoryTracker(), artifacts=store)
+    assert load_bundle(store, r.run_id).manifest.launcher == "local"
 
 
 # --- validation metrics (METRICS registry) ---

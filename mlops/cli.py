@@ -16,7 +16,7 @@ concrete adapters (tracker, data provider, artifact store) and hands them to
     mlops rayjob-status NAME [--namespace NS] [--kubectl CMD] [--json]
     mlops rayjob-logs   NAME [--namespace NS] [--kubectl CMD] [-f]
     mlops reproduce RUN_ID --artifacts DIR [--data-root DIR] [--tracker mlflow|inmemory] [--mlflow-uri URI]
-                                 [--device cpu] [--atol X] [--json]
+                                 [--device cpu] [--atol X] [--launcher local|ray] [--ray-address ADDR] [--json]
     mlops report RUN_ID --artifacts DIR [--out FILE]
     mlops diff   RUN_A RUN_B --artifacts DIR [--artifacts-b DIR] [--atol X] [--json]
     mlops list   --artifacts DIR [--experiment ID_PREFIX] [--atol X] [--json]
@@ -45,6 +45,7 @@ import os
 import shlex
 import subprocess
 import sys
+import tempfile
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -82,7 +83,13 @@ from mlops.application.predict import (
 )
 from mlops.application.progress import PROGRESS, is_live, read_progress
 from mlops.application.report import render_report, split_counts, split_rule, write_report
-from mlops.application.reproduce import ReproduceError, ReproduceReport, reproduce_lines, reproduce_run
+from mlops.application.reproduce import (
+    ReproduceError,
+    ReproduceReport,
+    replay_launcher,
+    reproduce_lines,
+    reproduce_run,
+)
 from mlops.application.runner import RunResult, verify_data
 from mlops.config import ConfigError, load_experiment_yaml
 from mlops.domain import ExperimentSpec, RunManifest, UnpinnedInputError, compute_experiment_id, compute_run_id
@@ -163,13 +170,17 @@ def _unverified(checks: dict[str, EnvCheck]) -> list[str]:
     return [f"{name}: {c.status}: {c.detail}" for name, c in checks.items() if c.status != "ok"]
 
 
+def _ray_launcher(address: str | None, storage_path: str | None, experiments: str) -> Launcher:
+    try:
+        from mlops.adapters.ray_launcher import RayLauncher
+    except ImportError as e:
+        raise CliError("the Ray launcher needs the 'distributed' extra: uv pip install -e '.[distributed]'") from e
+    return RayLauncher(address=address, storage_path=storage_path, experiments=experiments)
+
+
 def _launcher(spec: ExperimentSpec, args: argparse.Namespace) -> Launcher:
     if args.launcher == "ray":
-        try:
-            from mlops.adapters.ray_launcher import RayLauncher
-        except ImportError as e:
-            raise CliError("the Ray launcher needs the 'distributed' extra: uv pip install -e '.[distributed]'") from e
-        return RayLauncher(address=args.ray_address, storage_path=args.ray_storage, experiments=args.experiments)
+        return _ray_launcher(args.ray_address, args.ray_storage, args.experiments)
     if spec.resources.workers > 1:
         raise CliError(f"resources.workers={spec.resources.workers} needs a distributed launcher: pass --launcher ray")
     return LocalLauncher()
@@ -495,29 +506,57 @@ def cmd_rayjob_logs(args: argparse.Namespace) -> int:
         raise CliError(str(e)) from e
 
 
-def cmd_reproduce(args: argparse.Namespace) -> int:
-    store = LocalArtifactStore(args.artifacts)
+def _replay_launcher(kind: str, *, ray_address: str | None, storage: str, experiments: str) -> Launcher:
+    """The adapter behind a `replay_launcher` name; a Ray replay keeps its checkpoints in ``storage``."""
+    if kind == "local":
+        return LocalLauncher()
+    if kind == "ray":
+        return _ray_launcher(ray_address, storage, experiments)
+    raise CliError(f"no launcher {kind!r} to replay this run with (known: local, ray)")
+
+
+def _reproduce(
+    store: LocalArtifactStore, run_id: str, args: argparse.Namespace
+) -> tuple[ExperimentSpec, ReproduceReport]:
+    """Replay ``run_id`` with the launcher that made it (or ``args.launcher``). Shared by
+    `mlops reproduce` and `mlops ui`; bad input -> CliError, a replay that blows up propagates."""
     try:
-        spec = ExperimentSpec.model_validate_json(store.get(args.run_id, SPEC))
+        spec = ExperimentSpec.model_validate_json(store.get(run_id, SPEC))
+        manifest = RunManifest.model_validate_json(store.get(run_id, MANIFEST))
     except ArtifactError as e:
         raise CliError(str(e)) from e
     _discover(args.experiments)
     data = _data_provider(spec, args.data_root)
     tracker = _tracker(spec, args.tracker, args.mlflow_uri)
-
     try:
-        report = reproduce_run(
-            store,
-            args.run_id,
-            data=data,
-            tracker=tracker,
-            scratch=InMemoryArtifactStore(),
-            device=args.device,
-            atol=args.atol,
-            probe=_probe(),
-        )
+        with tempfile.TemporaryDirectory(prefix="mlops-reproduce-") as ray_storage:
+            launcher = _replay_launcher(
+                replay_launcher(manifest, spec, getattr(args, "launcher", None)),  # `mlops ui` has no --launcher
+                ray_address=args.ray_address,
+                storage=ray_storage,
+                experiments=args.experiments,
+            )
+            report = reproduce_run(
+                store,
+                run_id,
+                data=data,
+                tracker=tracker,
+                scratch=InMemoryArtifactStore(),
+                device=args.device,
+                atol=args.atol,
+                probe=_probe(),
+                launcher=launcher,
+            )
     except (ReproduceError, ArtifactError, TrackerError, DataError, RegistryError, RunnerError) as e:
         raise CliError(str(e)) from e
+    return spec, report
+
+
+def cmd_reproduce(args: argparse.Namespace) -> int:
+    try:
+        spec, report = _reproduce(LocalArtifactStore(args.artifacts), args.run_id, args)
+    except CliError:
+        raise
     except Exception as e:  # the replay itself blew up: environment, not evidence
         print(f"replay FAILED: {type(e).__name__}: {e}", file=sys.stderr)
         return 1
@@ -707,21 +746,7 @@ def _ui_actions(args: argparse.Namespace, store: LocalArtifactStore) -> UiAction
     """reproduce / resume for `mlops ui`, wired like `mlops reproduce` and `mlops resume`."""
 
     def reproduce(run_id: str) -> ReproduceReport:
-        try:
-            spec = ExperimentSpec.model_validate_json(store.get(run_id, SPEC))
-        except ArtifactError as e:
-            raise CliError(str(e)) from e
-        _discover(args.experiments)
-        return reproduce_run(
-            store,
-            run_id,
-            data=_data_provider(spec, args.data_root),
-            tracker=_tracker(spec, args.tracker, args.mlflow_uri),
-            scratch=InMemoryArtifactStore(),
-            device=args.device,
-            atol=args.atol,
-            probe=_probe(),
-        )
+        return _reproduce(store, run_id, args)[1]
 
     def resume(run_id: str) -> RunResult:
         spec, launcher, attempt, _ = _resume_target(
@@ -937,6 +962,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=0.0,
         help="weight tolerance; 0 (default) = bit-exact, >0 = allclose for cross-launcher checks",
     )
+    rp.add_argument(
+        "--launcher",
+        choices=["local", "ray"],
+        help="replay with this launcher (default: the one that made the run; workers > 1 needs ray)",
+    )
+    rp.add_argument("--ray-address", help="Ray cluster for a ray replay (default: RAY_ADDRESS or a local one)")
     rp.add_argument("--experiments", default="experiments", help="package to discover components from")
     rp.add_argument("--json", action="store_true", help="machine-readable report on stdout")
     rp.set_defaults(func=cmd_reproduce)

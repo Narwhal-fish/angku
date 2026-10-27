@@ -33,8 +33,16 @@ from mlops.adapters.local_artifacts import LocalArtifactStore
 from mlops.adapters.synthetic_data import SyntheticBlobs
 from mlops.application import run_experiment
 from mlops.application.bundle import MANIFEST, MODEL, save_bundle
-from mlops.application.reproduce import Mismatch, ReproduceError, ReproduceReport, reproduce_run
-from mlops.config import load_experiment_yaml
+from mlops.application.launch import LocalLauncher
+from mlops.application.reproduce import (
+    Mismatch,
+    ReproduceError,
+    ReproduceReport,
+    replay_launcher,
+    reproduce_lines,
+    reproduce_run,
+)
+from mlops.config import load_experiment_dict, load_experiment_yaml
 from mlops.domain import RunManifest, compute_experiment_id, compute_run_id
 from mlops.registry import discover
 
@@ -292,3 +300,86 @@ def test_environment_changes_are_in_the_json(spec, store):
     ).run_id
     out = json.loads(json.dumps(_reproduce(store, run_id, probe=FixedProbe(commit_ok=False)).to_dict()))
     assert {"path": "code.changed", "a": [], "b": ["mlops/x.py"]} in out["environment"]
+
+
+# --- the replay launcher: the run is replayed by the launcher it is given ---
+
+
+class _RecordingLauncher:
+    """Runs locally and records what it was asked to launch."""
+
+    def __init__(self):
+        self.calls = []
+
+    def launch(self, spec, **kw):
+        self.calls.append((spec, kw))
+        return LocalLauncher().launch(spec, **kw)
+
+
+def test_replay_runs_through_the_given_launcher(spec, store, run_id):
+    launcher = _RecordingLauncher()
+    scratch = InMemoryArtifactStore()
+    report = reproduce_run(store, run_id, data=_data(), tracker=InMemoryTracker(), scratch=scratch, launcher=launcher)
+
+    assert report.ok
+    ((replayed, kw),) = launcher.calls
+    assert replayed == spec
+    assert kw["attempt"] == 1 and kw["artifacts"] is scratch and kw["keep_best"] is None
+
+
+def test_report_names_the_launcher_of_the_replay(store, run_id):
+    report = _reproduce(store, run_id)
+
+    assert report.launcher == "local"
+    assert report.to_dict()["launcher"] == "local"
+    assert "  launcher       local" in reproduce_lines("tiny", report)
+
+
+def _multi_worker_bundle(spec, store) -> str:
+    spec = _with_workers(spec, 2)
+    exp_id = compute_experiment_id(spec)
+    rid = compute_run_id(exp_id, spec.resources, 1)
+    manifest = RunManifest(experiment_id=exp_id, run_id=rid, attempt=1, status="FINISHED", device="cpu", launcher="ray")
+    save_bundle(store, spec=spec, manifest=manifest, model_state={})
+    return rid
+
+
+def test_multi_worker_bundle_is_refused_by_the_local_launcher_before_anything_runs(spec, store):
+    rid = _multi_worker_bundle(spec, store)
+    tracker = InMemoryTracker()
+
+    with pytest.raises(ReproduceError, match="2 workers"):
+        reproduce_run(store, rid, data=_data(), tracker=tracker, scratch=InMemoryArtifactStore())
+    assert tracker.runs == []
+
+
+# --- which launcher replays a bundle (pure: the CLI maps the name to an adapter) ---
+
+
+def _manifest(launcher):
+    return RunManifest(experiment_id="e", run_id="r", attempt=1, status="FINISHED", device="cpu", launcher=launcher)
+
+
+def _with_workers(spec, workers):
+    return load_experiment_dict(
+        {
+            **spec.model_dump(),
+            "training": {**spec.training.model_dump(), "batch_size": 4},
+            "resources": {**spec.resources.model_dump(), "workers": workers},
+        }
+    )
+
+
+@pytest.mark.parametrize("recorded", ["local", "ray"])
+def test_the_recorded_launcher_replays_the_run(spec, recorded):
+    assert replay_launcher(_manifest(recorded), spec) == recorded
+
+
+@pytest.mark.parametrize(("workers", "expected"), [(1, "local"), (2, "ray")])
+def test_a_bundle_without_a_recorded_launcher_goes_by_its_workers(spec, workers, expected):
+    assert replay_launcher(_manifest(None), _with_workers(spec, workers)) == expected
+
+
+def test_an_explicit_launcher_wins_over_the_recorded_one(spec):
+    assert replay_launcher(_manifest("ray"), spec, override="local") == "local"
+    assert replay_launcher(_manifest(None), _with_workers(spec, 2), override="local") == "local"

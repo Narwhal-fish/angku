@@ -2,8 +2,10 @@
 
 The bundle promises that ``run_experiment(bundle.spec, attempt=bundle.manifest.attempt)``
 yields the same run_id, history and weights. ``reproduce_run`` executes that
-promise and reports which parts held. The original bundle is evidence and is
-never written to: the replay lands in a ``scratch`` store supplied by the caller.
+promise and reports which parts held. The replay goes through the ``launcher`` it is
+given (default: local, world size 1); bit-exact weights need the launcher that made the run.
+The original bundle is evidence and is never written to: the replay lands in a ``scratch``
+store supplied by the caller.
 
 Only FINISHED bundles can be verified (a FAILED one has no weights). A replay
 that itself blows up propagates as-is: a broken environment is not a mismatch.
@@ -23,8 +25,10 @@ import torch
 
 from mlops.application.bundle import Bundle, load_bundle
 from mlops.application.diff import Change, change_lines, diff_environments
-from mlops.application.runner import run_experiment
+from mlops.application.launch import Launcher, LocalLauncher
 from mlops.domain.best import BestCriterion
+from mlops.domain.experiment import ExperimentSpec
+from mlops.domain.manifest import RunManifest
 from mlops.ports.artifacts import ArtifactStore
 from mlops.ports.data import DataProvider
 from mlops.ports.environment import EnvironmentProbe
@@ -52,6 +56,7 @@ class ReproduceReport:
     mismatches: list[Mismatch] = field(default_factory=list)
     # Original vs replay environment (informational; empty = nothing differs or nothing recorded).
     environment: list[Change] = field(default_factory=list)
+    launcher: str | None = None  # which launcher ran the replay
 
     @property
     def ok(self) -> bool:
@@ -63,10 +68,22 @@ class ReproduceReport:
             "run_id": self.run_id,
             "experiment_id": self.experiment_id,
             "replay_run_id": self.replay_run_id,
+            "launcher": self.launcher,
             "checks": dict(self.checks),
             "mismatches": [{"check": m.check, "detail": m.detail} for m in self.mismatches],
             "environment": [c.to_dict() for c in self.environment],
         }
+
+
+def replay_launcher(manifest: RunManifest, spec: ExperimentSpec, override: str | None = None) -> str:
+    """Name of the launcher that should replay a bundle: ``override`` if given, else the one
+    recorded in the manifest, else (bundles predating the record) ``ray`` for a multi-worker run
+    and ``local`` otherwise, since the local launcher cannot run more than one worker."""
+    if override is not None:
+        return override
+    if manifest.launcher is not None:
+        return manifest.launcher
+    return "ray" if spec.resources.workers > 1 else "local"
 
 
 def reproduce_run(
@@ -79,6 +96,7 @@ def reproduce_run(
     device: str | None = None,
     atol: float = 0.0,
     probe: EnvironmentProbe | None = None,
+    launcher: Launcher | None = None,
 ) -> ReproduceReport:
     """Re-run the bundle at ``run_id`` into ``scratch`` and compare.
 
@@ -86,11 +104,18 @@ def reproduce_run(
     launcher/environment; a positive ``atol`` switches to ``allclose`` for
     cross-launcher checks.
     """
+    launcher = launcher or LocalLauncher()
     original = load_bundle(store, run_id)
     if original.manifest.status != "FINISHED" or original.model_state is None:
         raise ReproduceError(f"run {run_id} is {original.manifest.status}: nothing to reproduce (no weights)")
+    workers = original.spec.resources.workers
+    if workers > 1 and isinstance(launcher, LocalLauncher):
+        raise ReproduceError(
+            f"run {run_id} ran with {workers} workers; the local launcher runs one: replay it with a "
+            f"distributed launcher of the same size"
+        )
 
-    result = run_experiment(
+    result = launcher.launch(
         original.spec,
         data=data,
         tracker=tracker,
@@ -119,6 +144,7 @@ def reproduce_run(
         checks={c: c not in failed for c in CHECKS},
         mismatches=mismatches,
         environment=diff_environments(original.manifest, replay.manifest) if probe is not None else [],
+        launcher=replay.manifest.launcher,
     )
 
 
@@ -177,6 +203,7 @@ def reproduce_lines(name: str, r: ReproduceReport) -> list[str]:
         f"{name}: {'REPRODUCED' if r.ok else 'NOT REPRODUCED'}",
         f"  experiment_id  {r.experiment_id}",
         f"  run_id         {r.run_id}",
+        *([f"  launcher       {r.launcher}"] if r.launcher else []),
         *(f"  {check:<14} {'ok' if passed else 'MISMATCH'}" for check, passed in r.checks.items()),
         *(f"    {m.check}: {m.detail}" for m in r.mismatches),
     ]

@@ -71,6 +71,7 @@ def test_one_ray_worker_reproduces_the_local_run(launcher):
 
     a, b = load_bundle(local_store, local.run_id), load_bundle(ray_store, result.run_id)
     assert b.manifest.status == "FINISHED" and b.manifest.history == local.history
+    assert (a.manifest.launcher, b.manifest.launcher) == ("local", "ray")
     # Bit-exactness is only promised within one launcher/environment: Ray workers run with
     # OMP_NUM_THREADS=1, so CPU kernels sum in a different order than the local run.
     for k, v in a.model_state.items():
@@ -502,3 +503,33 @@ def test_relay_keeps_history_only_items_out_of_the_tracker():
     assert relay.stop() == [{"train/loss": 1.0}, {"train/loss": 0.5}]
     assert [s for s, _ in tracker.current.metrics] == [2]
     assert relay.start_info == {"environment": None, "resumes": []}
+
+
+# --- reproduce a multi-worker run (roadmap 17): replayed by Ray with the same world size ---
+
+
+def test_two_worker_ray_run_is_reproduced_bit_exactly_through_the_cli(tmp_path, capsys):
+    import json
+
+    import yaml
+
+    from mlops.cli import main
+
+    spec = _spec(workers=2, **{"training.epochs": 2})
+    path = tmp_path / "two_workers.yaml"
+    path.write_text(yaml.safe_dump(spec.model_dump(mode="json")))
+    art = str(tmp_path / "artifacts")
+    run = ["run", str(path), "--launcher", "ray", "--ray-storage", str(tmp_path / "ray"), "--artifacts", art]
+    assert main([*run, "--tracker", "inmemory", "--keep-best", "val/loss:min", "--json"]) == 0
+    run_id = json.loads(capsys.readouterr().out)["run_id"]
+
+    # No --launcher: the bundle's manifest says ray. atol 0 = torch.equal on model.pt and best.pt.
+    assert main(["reproduce", run_id, "--artifacts", art, "--tracker", "inmemory", "--json"]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["ok"] and report["launcher"] == "ray"
+    assert report["checks"] == {"run_id": True, "history": True, "weights": True}
+    assert (tmp_path / "artifacts" / run_id / "best.pt").exists()  # so the weights check covered best.pt too
+
+    # The same bundle cannot be replayed with one process.
+    assert main(["reproduce", run_id, "--artifacts", art, "--tracker", "inmemory", "--launcher", "local"]) == 2
+    assert "2 workers" in capsys.readouterr().err

@@ -30,6 +30,9 @@ class RunManifest(BaseModel):
     attempt: int = Field(ge=1)
     status: Literal["FINISHED", "FAILED"]
     device: str
+    # Which launcher ran it ("local", "ray"): a replay needs the same one for bit-exact weights.
+    # None = a bundle written before launchers were recorded.
+    launcher: str | None = None
     # One entry per completed epoch, in order.
     history: list[dict[str, float]] = Field(default_factory=list)
     # What the run actually ran on, verified against the spec's pins. None = not captured

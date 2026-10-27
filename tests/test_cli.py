@@ -15,7 +15,7 @@ from mlops.application.bundle import MANIFEST, MODEL, SPEC
 from mlops.application.report import REPORT
 from mlops.cli import main
 from mlops.config import load_experiment_yaml
-from mlops.domain import compute_experiment_id
+from mlops.domain import RunManifest, compute_experiment_id, compute_run_id
 
 ROOT = Path(__file__).parent.parent
 SMOKE = ROOT / "experiments/configs/tiny_cnn_smoke.yaml"
@@ -316,6 +316,89 @@ def test_reproduce_failed_run_exits_2(tmp_path, capsys):
     rc = main(["reproduce", run_dir.name, "--artifacts", str(art), "--tracker", "inmemory"])
     assert rc == 2
     assert "FAILED" in capsys.readouterr().err
+
+
+# The replay uses the launcher that made the run (manifest.launcher; see replay_launcher), or
+# --launcher. A Ray replay keeps its checkpoints in a temporary directory, removed afterwards.
+
+
+def _set_recorded_launcher(art, run_id, launcher):
+    manifest = art / run_id / MANIFEST
+    m = json.loads(manifest.read_text())
+    m["launcher"] = launcher
+    manifest.write_text(json.dumps(m))
+
+
+def test_reproduce_of_a_local_run_replays_locally(finished_run, capsys, fake_ray):
+    art, run_id = finished_run
+    assert main(["reproduce", run_id, "--artifacts", str(art), "--tracker", "inmemory", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["launcher"] == "local"
+    assert fake_ray.made == []
+
+
+def test_reproduce_of_a_ray_run_replays_through_ray(finished_run, capsys, fake_ray):
+    art, run_id = finished_run
+    _set_recorded_launcher(art, run_id, "ray")
+    argv = ["reproduce", run_id, "--artifacts", str(art), "--tracker", "inmemory", "--ray-address", "ray://head:10001"]
+
+    assert main(argv) == 0
+    (made,) = fake_ray.made
+    assert made["address"] == "ray://head:10001"
+    assert made["storage_path"] and not Path(made["storage_path"]).exists()  # temporary, removed
+    (launched,) = fake_ray.launched
+    assert launched["attempt"] == 1
+
+
+def test_reproduce_launcher_flag_overrides_the_recorded_one(finished_run, capsys, fake_ray):
+    art, run_id = finished_run
+    _set_recorded_launcher(art, run_id, "ray")
+    assert main(["reproduce", run_id, "--artifacts", str(art), "--tracker", "inmemory", "--launcher", "local"]) == 0
+    assert fake_ray.made == []
+
+
+def test_reproduce_multi_worker_run_with_the_local_launcher_exits_2(spec_two_workers_bundle, capsys, fake_ray):
+    art, run_id = spec_two_workers_bundle
+    rc = main(["reproduce", run_id, "--artifacts", str(art), "--tracker", "inmemory", "--launcher", "local"])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "2 workers" in err and "Traceback" not in err
+
+
+def test_ui_reproduce_picks_the_launcher_like_the_cli(finished_run, capsys, fake_ray):
+    from mlops.adapters.local_artifacts import LocalArtifactStore
+    from mlops.cli import _ui_actions, build_parser
+
+    art, run_id = finished_run
+    _set_recorded_launcher(art, run_id, "ray")
+    args = build_parser().parse_args(
+        ["ui", "--artifacts", str(art), "--tracker", "inmemory", "--ray-address", "ray://head:10001"]
+    )
+    report = _ui_actions(args, LocalArtifactStore(art)).reproduce(run_id)
+
+    assert report.ok
+    (made,) = fake_ray.made
+    assert made["address"] == "ray://head:10001" and not Path(made["storage_path"]).exists()
+
+
+@pytest.fixture
+def spec_two_workers_bundle(tmp_path):
+    """A FINISHED 2-worker bundle (written directly: training it needs Ray)."""
+    from mlops.adapters.local_artifacts import LocalArtifactStore
+    from mlops.application.bundle import save_bundle
+    from mlops.config import load_experiment_dict
+
+    raw = yaml.safe_load(SMOKE.read_text())
+    raw["training"]["batch_size"] = 4
+    raw["resources"]["workers"] = 2
+    spec = load_experiment_dict(raw)
+    exp_id = compute_experiment_id(spec)
+    run_id = compute_run_id(exp_id, spec.resources, 1)
+    art = tmp_path / "artifacts"
+    manifest = RunManifest(
+        experiment_id=exp_id, run_id=run_id, attempt=1, status="FINISHED", device="cpu", launcher="ray"
+    )
+    save_bundle(LocalArtifactStore(art), spec=spec, manifest=manifest, model_state={})
+    return art, run_id
 
 
 # --- report ---

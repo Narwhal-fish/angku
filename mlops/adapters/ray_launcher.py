@@ -367,6 +367,7 @@ class RayLauncher:
                 attempt=attempt,
                 status=status,
                 device=dev,
+                launcher="ray",
                 history=history,
                 environment=environment,
                 data_snapshot=data_snapshot,

@@ -242,6 +242,10 @@ Useful options for `mlops run`:
 - `--launcher ray` trains with several workers.
 - `--strict-env` refuses to start when the environment does not match the YAML.
 
+`mlops reproduce` re-runs a finished run with the same launcher it was trained with, so a run
+trained with several Ray workers is replayed with the same number of workers. Add
+`--ray-address ADDR` to replay it on a Ray cluster instead of a local one.
+
 `mlops <command> --help` lists every option.
 
 ## Run on Kubernetes
