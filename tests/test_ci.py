@@ -1,12 +1,14 @@
 """.github/workflows/ci.yml: checked statically (it only runs on GitHub).
 
 The lint job must run the ruff version pinned in the dev extra, or CI and the dev box disagree
-on what passes; the formatting commit listed in .git-blame-ignore-revs must be a full SHA.
+on what passes; the formatting commits listed in .git-blame-ignore-revs must be full SHAs on the current history
+(a squash merge replaces the branch's commits, leaving the listed one unreachable).
 """
 
 from __future__ import annotations
 
 import re
+import subprocess
 import tomllib
 from pathlib import Path
 
@@ -34,10 +36,17 @@ def test_lint_job_runs_the_pinned_ruff_check_and_format():
     assert "ruff@" in script and " check" in script and "format --check" in script
 
 
+def _blame_ignore_revs() -> list[str]:
+    lines = (ROOT / ".git-blame-ignore-revs").read_text().splitlines()
+    return [line for line in lines if line.strip() and not line.startswith("#")]
+
+
 def test_blame_ignore_revs_are_full_shas():
-    revs = [
-        line
-        for line in (ROOT / ".git-blame-ignore-revs").read_text().splitlines()
-        if line.strip() and not line.startswith("#")
-    ]
+    revs = _blame_ignore_revs()
     assert revs and all(re.fullmatch(r"[0-9a-f]{40}", r) for r in revs)
+
+
+def test_blame_ignore_revs_are_on_the_current_history():
+    for rev in _blame_ignore_revs():
+        git = ["git", "-C", str(ROOT), "merge-base", "--is-ancestor", rev, "HEAD"]
+        assert subprocess.run(git, capture_output=True).returncode == 0, f"{rev} is not an ancestor of HEAD"
