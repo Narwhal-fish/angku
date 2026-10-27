@@ -162,9 +162,7 @@ class RunDiff:
         }
 
 
-def diff_runs(
-    store_a: ArtifactStore, run_a: str, store_b: ArtifactStore, run_b: str, *, atol: float = 0.0
-) -> RunDiff:
+def diff_runs(store_a: ArtifactStore, run_a: str, store_b: ArtifactStore, run_b: str, *, atol: float = 0.0) -> RunDiff:
     """Raise ``ArtifactError`` when either run has no ``spec.json``. ``atol`` > 0 lets the history
     comparison tolerate last-bit drift (runs from different launchers)."""
     spec_a, man_a = _read(store_a, run_a)
@@ -172,8 +170,9 @@ def diff_runs(
     attempt_a = man_a.attempt if man_a else None
     attempt_b = man_b.attempt if man_b else None
 
-    run = _changes(_flatten({"resources": spec_a.resources.model_dump()}),
-                   _flatten({"resources": spec_b.resources.model_dump()}))
+    run = _changes(
+        _flatten({"resources": spec_a.resources.model_dump()}), _flatten({"resources": spec_b.resources.model_dump()})
+    )
     if attempt_a is not None and attempt_b is not None and attempt_a != attempt_b:
         run.append(Change("attempt", attempt_a, attempt_b))
 
@@ -260,10 +259,13 @@ def _metrics(a: RunManifest | None, b: RunManifest | None) -> list[MetricPair]:
 
 
 def _history(a: RunManifest, b: RunManifest, atol: float) -> HistoryDiff:
-    for epoch, (ra, rb) in enumerate(zip(a.history, b.history), start=1):
+    for epoch, (ra, rb) in enumerate(zip(a.history, b.history, strict=False), start=1):
         names = [*ra, *(k for k in rb if k not in ra)]
-        differ = [MetricPair(k, ra.get(k, ABSENT), rb.get(k, ABSENT)) for k in names
-                  if not _same(ra.get(k, ABSENT), rb.get(k, ABSENT), atol)]
+        differ = [
+            MetricPair(k, ra.get(k, ABSENT), rb.get(k, ABSENT))
+            for k in names
+            if not _same(ra.get(k, ABSENT), rb.get(k, ABSENT), atol)
+        ]
         if differ:
             return HistoryDiff(len(a.history), len(b.history), epoch, differ)
     return HistoryDiff(len(a.history), len(b.history), None)
@@ -297,11 +299,7 @@ def _flatten(value: Any, prefix: str = "") -> dict[str, Any]:
 
 def _changes(a: dict[str, Any], b: dict[str, Any]) -> list[Change]:
     paths = sorted(a.keys() | b.keys(), key=_natural)
-    return [
-        Change(p, a.get(p, ABSENT), b.get(p, ABSENT))
-        for p in paths
-        if a.get(p, ABSENT) != b.get(p, ABSENT)
-    ]
+    return [Change(p, a.get(p, ABSENT), b.get(p, ABSENT)) for p in paths if a.get(p, ABSENT) != b.get(p, ABSENT)]
 
 
 def _natural(path: str) -> list[tuple[int, Any]]:
@@ -319,7 +317,6 @@ def _sides(out: dict[str, Any], a: Any, b: Any) -> dict[str, Any]:
 
 def _json_float(v: Any) -> Any:
     return None if isinstance(v, float) and math.isnan(v) else v
-
 
 
 # -- text: what `mlops diff` prints, and what the UI shows ----------------------
@@ -346,8 +343,9 @@ def history_lines(h: HistoryDiff | None) -> list[str]:
     if h.first_divergence is None:
         if h.epochs_a == h.epochs_b:
             return [f"history: identical over all {h.epochs_a} epochs"]
-        return [f"history: identical over the {h.identical_epochs} common epochs "
-                f"(a has {h.epochs_a}, b has {h.epochs_b})"]
+        return [
+            f"history: identical over the {h.identical_epochs} common epochs (a has {h.epochs_a}, b has {h.epochs_b})"
+        ]
     width = max(len(m.name) for m in h.at_divergence)
     return [
         f"history: identical for {h.identical_epochs} epochs, first differs at epoch {h.first_divergence}",

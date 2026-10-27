@@ -100,7 +100,9 @@ def _check_code(pinned: str | None, code: CodeState) -> EnvCheck:
                 status="mismatch",
                 detail=f"{len(code.changed)} file(s) differ from {short}: {listed}{more}",
             )
-        at = "" if code.head == pinned else f" (HEAD {code.head[:12] if code.head else '?'}; only non-code files differ)"
+        at = (
+            "" if code.head == pinned else f" (HEAD {code.head[:12] if code.head else '?'}; only non-code files differ)"
+        )
         return EnvCheck(status="ok", detail=f"code matches {short}{at}")
     if code.source == "env":
         if code.head == pinned:
@@ -126,7 +128,9 @@ def check_snapshot(pinned: str | None, served: str | None) -> EnvCheck:
     if pinned is None or not CONTENT_HASH_RE.match(pinned):
         return EnvCheck(
             status="unknown",
-            detail=f"dataset.snapshot {pinned!r} is not a content hash; the served data is {served} (pin that to verify)",
+            detail=(
+                f"dataset.snapshot {pinned!r} is not a content hash; the served data is {served} (pin that to verify)"
+            ),
         )
     if pinned == served:
         return EnvCheck(status="ok", detail=f"served data hashes to {served}")

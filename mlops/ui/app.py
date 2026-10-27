@@ -281,15 +281,21 @@ class RunScreen(Screen[None]):
         self._loaded = (files, manifest_bytes, progress)
         summary = next((r for r in self.app.runs() if r.run_id == self.run_id), None)
         if summary is None:  # gone, or not a run (no spec.json)
-            _fill(self.query_one("#overview", DataTable), ("FIELD", "VALUE"),
-                  [("run_id", self.run_id), ("status", "not found in the store")])
+            _fill(
+                self.query_one("#overview", DataTable),
+                ("FIELD", "VALUE"),
+                [("run_id", self.run_id), ("status", "not found in the store")],
+            )
             return
         spec = manifest = None
         if summary.status != "UNREADABLE":
             spec = ExperimentSpec.model_validate_json(store.get(self.run_id, SPEC))
             manifest = RunManifest.model_validate_json(manifest_bytes) if manifest_bytes else None
-        _fill(self.query_one("#overview", DataTable), ("FIELD", "VALUE"),
-              overview_rows(summary, spec=spec, manifest=manifest, now=time.time()))
+        _fill(
+            self.query_one("#overview", DataTable),
+            ("FIELD", "VALUE"),
+            overview_rows(summary, spec=spec, manifest=manifest, now=time.time()),
+        )
         if manifest is not None:
             history = manifest.history
         elif summary.status == "RUNNING" and progress is not None:
@@ -453,8 +459,13 @@ class LogsScreen(Screen[None]):
 
     def fetch(self) -> None:
         assert self.app.actions is not None and self.app.actions.rayjob_logs is not None
-        self.run_worker(partial(self.app.actions.rayjob_logs, self.job_name), group="logs", thread=True,
-                        exclusive=True, exit_on_error=False)
+        self.run_worker(
+            partial(self.app.actions.rayjob_logs, self.job_name),
+            group="logs",
+            thread=True,
+            exclusive=True,
+            exit_on_error=False,
+        )
 
     def on_worker_state_changed(self, event: Worker.StateChanged) -> None:
         if event.worker.group != "logs":
@@ -502,8 +513,11 @@ class DiffScreen(Screen[None]):
 
 
 class ConfirmScreen(ModalScreen[bool]):
-    BINDINGS = [Binding("y", "answer(True)", "Yes"), Binding("n", "answer(False)", "No"),
-                Binding("escape", "answer(False)", "No")]
+    BINDINGS = [
+        Binding("y", "answer(True)", "Yes"),
+        Binding("n", "answer(False)", "No"),
+        Binding("escape", "answer(False)", "No"),
+    ]
 
     def __init__(self, question: str) -> None:
         super().__init__()
@@ -551,15 +565,26 @@ class MlopsApp(App[None]):
     #filter.active { display: block; }
     #metrics, #checks { height: auto; margin-bottom: 1; }
     ConfirmScreen, ResultScreen { align: center middle; }
-    .dialog { width: 90%; max-width: 110; height: auto; max-height: 90%; border: thick $accent; padding: 1 2; background: $surface; }
+    .dialog {
+        width: 90%; max-width: 110; height: auto; max-height: 90%;
+        border: thick $accent; padding: 1 2; background: $surface;
+    }
     .dialog VerticalScroll { height: auto; max-height: 30; }
     .buttons { height: auto; margin-top: 1; }
     .dialog Button { margin-right: 2; }
     """
     BINDINGS = [Binding("q", "quit", "Quit"), Binding("question_mark", "toggle_help", "Help")]
 
-    def __init__(self, store: ArtifactStore, *, label: str, refresh: float = 2.0,
-                 experiment: str | None = None, actions: UiActions | None = None, atol: float = 0.0) -> None:
+    def __init__(
+        self,
+        store: ArtifactStore,
+        *,
+        label: str,
+        refresh: float = 2.0,
+        experiment: str | None = None,
+        actions: UiActions | None = None,
+        atol: float = 0.0,
+    ) -> None:
         super().__init__()
         self.store = store
         self.label = label
@@ -624,8 +649,8 @@ class MlopsApp(App[None]):
         epochs = run.epochs_total or "?"
         question = (
             f"Reproduce {run.name} {run_id[:12]}? This re-runs its {epochs} epoch(s) on this machine."
-            if kind == "reproduce" else
-            f"Resume {run.name} {run_id[:12]} from its checkpoint ({run.epochs_done or '?'}/{epochs} epochs)?"
+            if kind == "reproduce"
+            else f"Resume {run.name} {run_id[:12]} from its checkpoint ({run.epochs_done or '?'}/{epochs} epochs)?"
         )
 
         def answered(yes: bool | None) -> None:
@@ -648,8 +673,11 @@ class MlopsApp(App[None]):
         if event.state == WorkerState.SUCCESS:
             self.busy = None
             result = worker.result
-            lines = (reproduce_lines(worker.name, result) if isinstance(result, ReproduceReport)
-                     else resume_lines(worker.name, result))
+            lines = (
+                reproduce_lines(worker.name, result)
+                if isinstance(result, ReproduceReport)
+                else resume_lines(worker.name, result)
+            )
             self.push_screen(ResultScreen(lines))
         elif event.state in (WorkerState.ERROR, WorkerState.CANCELLED):
             self.notify(f"{self.busy} failed: {worker.error}", severity="error", timeout=30)

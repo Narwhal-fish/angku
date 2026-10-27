@@ -39,9 +39,7 @@ def build_dice(p: DiceParams):
         num_classes = logits.shape[1]
         names = p.class_names if p.class_names is not None else [str(c) for c in range(num_classes)]
         if len(names) != num_classes:
-            raise ValueError(
-                f"dice: class_names has {len(names)} entries but the model outputs {num_classes} classes"
-            )
+            raise ValueError(f"dice: class_names has {len(names)} entries but the model outputs {num_classes} classes")
         spatial = tuple(range(2, logits.ndim))
         pred = torch.nn.functional.one_hot(logits.argmax(1), num_classes).movedim(-1, 1)
         true = torch.nn.functional.one_hot(target.long(), num_classes).movedim(-1, 1)

@@ -44,13 +44,16 @@ def test_sliding_window_param_typo_rejected():
         INFERERS.build("sliding_window", {"roi_size": [4, 4, 4], "overlapp": 0.5})
 
 
-@pytest.mark.parametrize("bad", [
-    {"roi_size": [0, 4, 4]},
-    {"roi_size": [4, 4, 4], "overlap": 1.0},
-    {"roi_size": [4, 4, 4], "sw_batch_size": 0},
-    {"roi_size": [4, 4, 4], "mode": "triangle"},
-    {},
-])
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"roi_size": [0, 4, 4]},
+        {"roi_size": [4, 4, 4], "overlap": 1.0},
+        {"roi_size": [4, 4, 4], "sw_batch_size": 0},
+        {"roi_size": [4, 4, 4], "mode": "triangle"},
+        {},
+    ],
+)
 def test_sliding_window_bad_params_rejected(bad):
     with pytest.raises(RegistryError):
         INFERERS.build("sliding_window", bad)

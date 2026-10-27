@@ -121,11 +121,18 @@ def _train_loop(config: dict[str, Any]) -> dict[str, Any] | None:
         d = tempfile.mkdtemp(prefix="mlops-ckpt-")
         torch.save(state.rng, os.path.join(d, _RNG_FILE.format(rank=worker.rank)))
         if worker.is_leader:
-            torch.save({
-                "epoch": state.epoch, "history": state.history, "world_size": worker.world_size,
-                "model": dict(state.model_state), "optimizer": state.optimizer_state, **start_info,
-                "best_model": state.best_model_state,
-            }, os.path.join(d, _TRAIN_STATE))
+            torch.save(
+                {
+                    "epoch": state.epoch,
+                    "history": state.history,
+                    "world_size": worker.world_size,
+                    "model": dict(state.model_state),
+                    "optimizer": state.optimizer_state,
+                    **start_info,
+                    "best_model": state.best_model_state,
+                },
+                os.path.join(d, _TRAIN_STATE),
+            )
         ray.train.report({"epoch": state.epoch, "checkpoint": 1.0}, checkpoint=Checkpoint.from_directory(d))
 
     model, history, best_state = train_worker(
@@ -171,12 +178,16 @@ def _restore(worker: Worker) -> tuple[TrainState, EnvironmentRecord | None, list
             raise RunnerError("the latest Ray checkpoint holds final weights only: the run already finished")
         st = torch.load(state_file, map_location="cpu", weights_only=True)
         if st["world_size"] != worker.world_size or not rng_file.exists():
-            raise RunnerError(
-                f"checkpoint was taken with {st['world_size']} workers, this run has {worker.world_size}"
-            )
+            raise RunnerError(f"checkpoint was taken with {st['world_size']} workers, this run has {worker.world_size}")
         rng = torch.load(rng_file, map_location="cpu", weights_only=True)
-    state = TrainState(epoch=st["epoch"], history=st["history"], model_state=st["model"],
-                       optimizer_state=st["optimizer"], rng=rng, best_model_state=st.get("best_model"))
+    state = TrainState(
+        epoch=st["epoch"],
+        history=st["history"],
+        model_state=st["model"],
+        optimizer_state=st["optimizer"],
+        rng=rng,
+        best_model_state=st.get("best_model"),
+    )
     environment = EnvironmentRecord.model_validate_json(st["environment"]) if st["environment"] else None
     return state, environment, [ResumePoint.model_validate_json(r) for r in st["resumes"]]
 
@@ -306,10 +317,17 @@ class RayLauncher:
             assert artifacts is not None
             # A killed driver never reaches save_bundle; `mlops resume` needs these to come back.
             save_spec(artifacts, run_id, spec)
-            save_launch(artifacts, run_id, LaunchRecord(
-                launcher="ray", attempt=attempt, checkpoint_every=checkpoint_every, storage_path=storage,
-                keep_best=str(keep_best) if keep_best is not None else None,
-            ))
+            save_launch(
+                artifacts,
+                run_id,
+                LaunchRecord(
+                    launcher="ray",
+                    attempt=attempt,
+                    checkpoint_every=checkpoint_every,
+                    storage_path=storage,
+                    keep_best=str(keep_best) if keep_best is not None else None,
+                ),
+            )
         # num_cpus=0: schedulable anywhere (a KubeRay head has num-cpus=0) and never competes
         # with the training workers for CPUs.
         metrics_queue = Queue(actor_options={"num_cpus": 0})
@@ -333,8 +351,7 @@ class RayLauncher:
             ),
             # Same name + storage on resume: that is how Ray hands back the latest checkpoint.
             # Resuming only ever needs the latest one; Ray's default keeps them all.
-            run_config=RunConfig(name=name, storage_path=storage,
-                                 checkpoint_config=CheckpointConfig(num_to_keep=1)),
+            run_config=RunConfig(name=name, storage_path=storage, checkpoint_config=CheckpointConfig(num_to_keep=1)),
         )
 
         history: list[dict[str, float]] = []
@@ -345,9 +362,15 @@ class RayLauncher:
 
         def _manifest(status: RunStatus) -> RunManifest:
             return RunManifest(
-                experiment_id=experiment_id, run_id=run_id, attempt=attempt,
-                status=status, device=dev, history=history, environment=environment,
-                data_snapshot=data_snapshot, resumes=resumes,
+                experiment_id=experiment_id,
+                run_id=run_id,
+                attempt=attempt,
+                status=status,
+                device=dev,
+                history=history,
+                environment=environment,
+                data_snapshot=data_snapshot,
+                resumes=resumes,
                 best=best_record(history, keep_best) if keep_best is not None and status == "FINISHED" else None,
                 split=assignment.counts() if assignment is not None else None,
             )
@@ -355,7 +378,9 @@ class RayLauncher:
         def _take_start_info(info: dict[str, Any] | None) -> None:
             nonlocal environment, resumes
             if info is not None:
-                environment = EnvironmentRecord.model_validate_json(info["environment"]) if info["environment"] else None
+                environment = (
+                    EnvironmentRecord.model_validate_json(info["environment"]) if info["environment"] else None
+                )
                 resumes = [ResumePoint.model_validate_json(r) for r in info["resumes"]]
 
         tracker.start_run(run_id=run_id, experiment_id=experiment_id, spec=spec, resume=resume)
@@ -385,22 +410,33 @@ class RayLauncher:
             _take_start_info(relay.start_info)
             tracker.end_run("FAILED")
             if artifacts is not None:
-                save_bundle(artifacts, spec=spec, manifest=_manifest("FAILED"), model_state=None,
-                            split=assignment)
+                save_bundle(artifacts, spec=spec, manifest=_manifest("FAILED"), model_state=None, split=assignment)
             raise
         finally:
             metrics_queue.shutdown()
         tracker.end_run("FINISHED")
         if artifacts is not None:
-            save_bundle(artifacts, spec=spec, manifest=_manifest("FINISHED"), model_state=state,
-                        best_state=best_state, split=assignment)
+            save_bundle(
+                artifacts,
+                spec=spec,
+                manifest=_manifest("FINISHED"),
+                model_state=state,
+                best_state=best_state,
+                split=assignment,
+            )
         if not keep_checkpoint:
             # Ray's copies (latest checkpoint + final weights) are dead weight once model.pt is
             # written: nothing left to resume. Through Ray's filesystem, so s3:// storage works too.
             result.filesystem.delete_dir(result.path)
         return RunResult(
-            experiment_id=experiment_id, run_id=run_id, device=dev, history=history,
-            environment=environment, data_snapshot=data_snapshot, resumes=resumes, split=assignment,
+            experiment_id=experiment_id,
+            run_id=run_id,
+            device=dev,
+            history=history,
+            environment=environment,
+            data_snapshot=data_snapshot,
+            resumes=resumes,
+            split=assignment,
         )
 
 
@@ -411,4 +447,3 @@ def _refuse_if_finished(store: ArtifactStore, run_id: str) -> None:
         return
     if status == "FINISHED":
         raise RunnerError(f"run {run_id} already FINISHED; nothing to resume")
-

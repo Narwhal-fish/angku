@@ -60,8 +60,8 @@ def _write_case(task: Path, i: int, *, spleen_at: tuple[int, int, int]) -> dict[
     img[2:-2, 2:-2, 1:-1] = 40.0
     lbl = np.zeros(SHAPE, dtype=np.uint8)
     x, y, z = spleen_at
-    img[x:x + 3, y:y + 3, z:z + 3] = 120.0
-    lbl[x:x + 3, y:y + 3, z:z + 3] = 1
+    img[x : x + 3, y : y + 3, z : z + 3] = 120.0
+    lbl[x : x + 3, y : y + 3, z : z + 3] = 1
     affine = np.diag([*SPACING, 1.0])
     name = f"spleen_{i}.nii.gz"
     nib.save(nib.Nifti1Image(img, affine), task / "imagesTr" / name)
@@ -131,7 +131,6 @@ def test_last_num_val_cases_by_name_are_validation(provider):
     assert [c.name for c in splits.val.cases] == ["spleen_2", "spleen_3"]
 
 
-
 # Without num_val: with `split` the platform chooses val.
 NO_NUM_VAL = {k: v for k, v in PRE.items() if k != "num_val"}
 
@@ -152,7 +151,9 @@ def test_spec_split_picks_the_cases_and_serves_test_like_val(provider):
 
 
 def test_spec_split_without_test_serves_none(provider):
-    splits = provider.load(_ds(), NO_NUM_VAL, split=SplitAssignment(train=["spleen_0", "spleen_1"], val=["spleen_2", "spleen_3"]))
+    splits = provider.load(
+        _ds(), NO_NUM_VAL, split=SplitAssignment(train=["spleen_0", "spleen_1"], val=["spleen_2", "spleen_3"])
+    )
     assert splits.test is None
 
 
@@ -204,8 +205,8 @@ def test_train_crops_follow_the_torch_seed(provider):
         return [train[i % len(train)][0] for i in range(12)]
 
     a, b, c = draw(0), draw(0), draw(1)
-    assert all(torch.equal(p, q) for p, q in zip(a, b))
-    assert not all(torch.equal(p, q) for p, q in zip(a, c))
+    assert all(torch.equal(p, q) for p, q in zip(a, b, strict=True))
+    assert not all(torch.equal(p, q) for p, q in zip(a, c, strict=True))
 
 
 def test_val_crop_is_fixed_and_contains_the_label(provider):
@@ -221,7 +222,7 @@ def test_val_crop_is_fixed_and_contains_the_label(provider):
 def test_resampling_to_finer_spacing_grows_the_volume(provider):
     coarse = provider.load(_ds(), PRE).val.cases[0].image.shape
     fine = provider.load(_ds(), {**PRE, "spacing": [2.0, 2.0, 2.0]}).val.cases[0].image.shape
-    assert all(f > c for f, c in zip(fine[1:], coarse[1:]))
+    assert all(f > c for f, c in zip(fine[1:], coarse[1:], strict=True))
 
 
 def test_volume_smaller_than_roi_is_padded(provider):
@@ -235,11 +236,13 @@ def test_volume_smaller_than_roi_is_padded(provider):
 
 def _spleen_spec(path: Path):
     spec = load_experiment_yaml(ROOT / "experiments/configs/tiny_cnn_smoke.yaml")
-    return spec.model_copy(update={
-        "dataset": _ds(),
-        "preprocessing": PRE,
-        "training": spec.training.model_copy(update={"epochs": 2}),
-    })
+    return spec.model_copy(
+        update={
+            "dataset": _ds(),
+            "preprocessing": PRE,
+            "training": spec.training.model_copy(update={"epochs": 2}),
+        }
+    )
 
 
 def test_runs_end_to_end_and_reproduces(provider, tmp_path):
@@ -311,12 +314,14 @@ def test_full_volume_val_with_sliding_window_runs_end_to_end(provider, tmp_path)
     from mlops.config import load_experiment_dict
 
     spec = _spleen_spec(tmp_path)
-    spec = load_experiment_dict({
-        **spec.model_dump(),
-        "preprocessing": {**PRE, "val": "full_volume"},
-        "inference": {"name": "sliding_window", "params": {"roi_size": [8, 8, 8], "overlap": 0.25}},
-        "metrics": [{"name": "dice", "params": {"include_background": False, "class_names": ["bg", "spleen"]}}],
-    })
+    spec = load_experiment_dict(
+        {
+            **spec.model_dump(),
+            "preprocessing": {**PRE, "val": "full_volume"},
+            "inference": {"name": "sliding_window", "params": {"roi_size": [8, 8, 8], "overlap": 0.25}},
+            "metrics": [{"name": "dice", "params": {"include_background": False, "class_names": ["bg", "spleen"]}}],
+        }
+    )
     a = run_experiment(spec, data=provider, tracker=InMemoryTracker())
     b = run_experiment(spec, data=provider, tracker=InMemoryTracker())
     assert a.history == b.history

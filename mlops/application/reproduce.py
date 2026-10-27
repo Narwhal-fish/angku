@@ -88,9 +88,7 @@ def reproduce_run(
     """
     original = load_bundle(store, run_id)
     if original.manifest.status != "FINISHED" or original.model_state is None:
-        raise ReproduceError(
-            f"run {run_id} is {original.manifest.status}: nothing to reproduce (no weights)"
-        )
+        raise ReproduceError(f"run {run_id} is {original.manifest.status}: nothing to reproduce (no weights)")
 
     result = run_experiment(
         original.spec,
@@ -101,8 +99,11 @@ def reproduce_run(
         device=device,
         probe=probe,
         # keep-best is a launch option, not in the spec: replay it so best.pt is checked too
-        keep_best=(BestCriterion(metric=original.manifest.best.metric, mode=original.manifest.best.mode)
-                   if original.manifest.best is not None else None),
+        keep_best=(
+            BestCriterion(metric=original.manifest.best.metric, mode=original.manifest.best.mode)
+            if original.manifest.best is not None
+            else None
+        ),
     )
     replay = load_bundle(scratch, result.run_id)
 
@@ -133,7 +134,7 @@ def _check_history(original: Bundle, replay: Bundle) -> list[Mismatch]:
     if len(a) != len(b):
         return [Mismatch("history", f"bundle has {len(a)} epochs, replay produced {len(b)}")]
     out: list[Mismatch] = []
-    for epoch, (ea, eb) in enumerate(zip(a, b)):
+    for epoch, (ea, eb) in enumerate(zip(a, b, strict=True)):
         if set(ea) != set(eb):
             out.append(Mismatch("history", f"epoch {epoch}: metrics {sorted(ea)} vs {sorted(eb)}"))
             continue
@@ -158,7 +159,9 @@ def _compare_states(a: dict[str, Any], b: dict[str, Any], atol: float, prefix: s
     for k in sorted(set(a) & set(b)):
         ta, tb = a[k], b[k]
         if ta.shape != tb.shape or ta.dtype != tb.dtype:
-            out.append(Mismatch("weights", f"{prefix}{k}: {tuple(ta.shape)}/{ta.dtype} vs {tuple(tb.shape)}/{tb.dtype}"))
+            out.append(
+                Mismatch("weights", f"{prefix}{k}: {tuple(ta.shape)}/{ta.dtype} vs {tuple(tb.shape)}/{tb.dtype}")
+            )
             continue
         same = torch.equal(ta, tb) if atol == 0 else torch.allclose(ta, tb, atol=atol, rtol=0)
         if not same:

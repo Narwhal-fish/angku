@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from pydantic import ValidationError
 
 from mlops.config import ConfigError, load_experiment_dict, load_experiment_yaml
 from mlops.domain import UnpinnedInputError, compute_experiment_id, compute_run_id
@@ -95,9 +96,7 @@ def test_6_resources_change_run_id_only(raw):
     assert eid1 == eid4
     assert compute_run_id(eid1, spec1.resources) != compute_run_id(eid4, spec4.resources)
     # same hardware, different attempt -> different RunID too
-    assert compute_run_id(eid1, spec1.resources, attempt=1) != compute_run_id(
-        eid1, spec1.resources, attempt=2
-    )
+    assert compute_run_id(eid1, spec1.resources, attempt=1) != compute_run_id(eid1, spec1.resources, attempt=2)
 
 
 # 7) unpinned inputs -> refuse to compute ExperimentID
@@ -153,7 +152,7 @@ def test_8b_typo_in_top_level_section_rejected(raw):
 
 def test_spec_is_immutable(raw):
     spec = load_experiment_dict(raw)
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         spec.training.learning_rate = 1.0  # type: ignore[misc]
 
 

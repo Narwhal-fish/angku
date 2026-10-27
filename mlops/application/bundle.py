@@ -18,8 +18,8 @@ from __future__ import annotations
 
 import io
 import json
-from dataclasses import asdict, dataclass, field
 from collections.abc import Mapping
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
 import torch
@@ -165,8 +165,12 @@ def load_checkpoint(store: ArtifactStore, run_id: str) -> Checkpoint:
         attempt=p["attempt"],
         checkpoint_every=p["checkpoint_every"],
         state=TrainState(
-            epoch=p["epoch"], history=p["history"], model_state=p["model"],
-            optimizer_state=p["optimizer"], rng=p["rng"], best_model_state=p.get("best_model"),
+            epoch=p["epoch"],
+            history=p["history"],
+            model_state=p["model"],
+            optimizer_state=p["optimizer"],
+            rng=p["rng"],
+            best_model_state=p.get("best_model"),
         ),
         environment=EnvironmentRecord.model_validate_json(p["environment"]) if p["environment"] else None,
         resumes=[ResumePoint.model_validate_json(r) for r in p["resumes"]],

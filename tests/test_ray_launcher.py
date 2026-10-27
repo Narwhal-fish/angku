@@ -12,6 +12,7 @@ import torch
 
 pytest.importorskip("ray.train")
 import ray  # noqa: E402
+from ray.train import TrainingFailedError  # noqa: E402
 
 from mlops.adapters.inmemory_artifacts import InMemoryArtifactStore  # noqa: E402
 from mlops.adapters.inmemory_tracker import InMemoryTracker  # noqa: E402
@@ -134,7 +135,7 @@ def test_gpu_workers_without_gpus_fail_before_starting(launcher):
 def test_worker_failure_marks_run_failed_and_keeps_failed_bundle(launcher):
     spec = _spec(workers=2, **{"model.params": {"in_channels": 3, "out_channels": 2, "hidden": 4, "spatial_dims": 3}})
     tracker, store = InMemoryTracker(), InMemoryArtifactStore()
-    with pytest.raises(Exception):  # Ray wraps the worker's RuntimeError
+    with pytest.raises(TrainingFailedError):  # Ray wraps the worker's RuntimeError
         launcher.launch(spec, data=_data(), tracker=tracker, artifacts=store)
     run = tracker.runs[0]
     assert run.status == "FAILED"
@@ -148,8 +149,9 @@ def test_environment_is_captured_on_the_training_worker(launcher):
     from tests.test_environment import FixedProbe
 
     store = InMemoryArtifactStore()
-    result = launcher.launch(_spec(workers=1), data=_data(), tracker=InMemoryTracker(), artifacts=store,
-                             probe=FixedProbe())
+    result = launcher.launch(
+        _spec(workers=1), data=_data(), tracker=InMemoryTracker(), artifacts=store, probe=FixedProbe()
+    )
     env = load_bundle(store, result.run_id).manifest.environment
     assert env is not None and env.checks["code.commit"].status == "ok"
     assert env.actual.platform != f"pid={os.getpid()}"  # the rank-0 worker, not the driver
@@ -173,9 +175,7 @@ def test_metrics_are_aggregated_over_every_rank(launcher, n_val):
     # Every val case must count exactly once, as in a single-process run.
     from mlops.registry import LOSSES, METRICS, MODELS
 
-    spec = load_experiment_dict(
-        {**_spec(workers=2).model_dump(), "metrics": [{"name": "dice", "params": {}}]}
-    )
+    spec = load_experiment_dict({**_spec(workers=2).model_dump(), "metrics": [{"name": "dice", "params": {}}]})
     store = InMemoryArtifactStore()
     result = launcher.launch(spec, data=_data(n_val=n_val), tracker=InMemoryTracker(), artifacts=store)
 
@@ -193,8 +193,6 @@ def test_metrics_are_aggregated_over_every_rank(launcher, n_val):
     for key, values in per_sample.items():
         expected = values[~values.isnan()].double().mean().item()
         assert result.final_metrics[f"val/{key}"] == pytest.approx(expected, abs=1e-6), key
-
-
 
 
 # --- live metrics: rank 0 streams each epoch to the driver's tracker while training runs ---
@@ -264,7 +262,7 @@ def test_metrics_reach_the_tracker_while_training(launcher, tmp_path):
 def test_failed_ray_run_keeps_the_epochs_it_finished(launcher, tmp_path):
     spec = _spec(workers=1, **{"training.epochs": 3})
     tracker, store = InMemoryTracker(), InMemoryArtifactStore()
-    with pytest.raises(Exception):
+    with pytest.raises(TrainingFailedError):
         launcher.launch(spec, data=GatedBlobs(str(tmp_path / "unused"), fail=True), tracker=tracker, artifacts=store)
     run = tracker.runs[0]
     assert run.status == "FAILED"
@@ -344,10 +342,12 @@ class FailOnceBlobs(SyntheticBlobs):
 
 def _resumable_spec():
     base = _spec(workers=2, **{"training.epochs": 4})
-    return load_experiment_dict({
-        **base.model_dump(),
-        "augmentation": [{"name": "rand_flip", "params": {"prob": 0.5, "spatial_axis": [0, 1, 2]}}],
-    })
+    return load_experiment_dict(
+        {
+            **base.model_dump(),
+            "augmentation": [{"name": "rand_flip", "params": {"prob": 0.5, "spatial_axis": [0, 1, 2]}}],
+        }
+    )
 
 
 def test_ray_run_resumes_from_its_checkpoint_bit_exactly(tmp_path):
@@ -356,21 +356,30 @@ def test_ray_run_resumes_from_its_checkpoint_bit_exactly(tmp_path):
     spec = _resumable_spec()
     ref_store = InMemoryArtifactStore()
     crit = BestCriterion(metric="val/loss", mode="max")  # best = an epoch before the interruption
-    ref = RayLauncher(storage_path=tmp_path / "ref").launch(spec, data=_data(), tracker=InMemoryTracker(),
-                                                         artifacts=ref_store, keep_best=crit)
+    ref = RayLauncher(storage_path=tmp_path / "ref").launch(
+        spec, data=_data(), tracker=InMemoryTracker(), artifacts=ref_store, keep_best=crit
+    )
 
     launcher, store, tracker = RayLauncher(storage_path=tmp_path / "ray"), InMemoryArtifactStore(), InMemoryTracker()
     # 2 ranks x 2 samples per epoch: access 5 is the first item of epoch 3 on each rank
     data = FailOnceBlobs(after=4, marker=str(tmp_path / "preempted"))
-    with pytest.raises(Exception):
-        launcher.launch(spec, data=data, tracker=tracker, artifacts=store, checkpoint_every=1,
-                        probe=FixedProbe(commit_ok=True), keep_best=crit)
+    with pytest.raises(TrainingFailedError):
+        launcher.launch(
+            spec,
+            data=data,
+            tracker=tracker,
+            artifacts=store,
+            checkpoint_every=1,
+            probe=FixedProbe(commit_ok=True),
+            keep_best=crit,
+        )
     failed = load_bundle(store, ref.run_id).manifest
     assert failed.status == "FAILED" and len(failed.history) == 2
     assert failed.environment is not None  # recorded at the start now, so a failure keeps it
 
-    result = launcher.launch(spec, data=data, tracker=tracker, artifacts=store, resume=True,
-                             probe=FixedProbe(commit_ok=False))
+    result = launcher.launch(
+        spec, data=data, tracker=tracker, artifacts=store, resume=True, probe=FixedProbe(commit_ok=False)
+    )
     assert result.run_id == ref.run_id
     assert result.history == ref.history
     a, b = load_bundle(ref_store, ref.run_id), load_bundle(store, result.run_id)
@@ -392,7 +401,8 @@ def test_ray_checkpointing_records_how_to_resume(tmp_path):
 
     store = InMemoryArtifactStore()
     result = RayLauncher(storage_path=tmp_path / "ray").launch(
-        _spec(workers=1), data=_data(), tracker=InMemoryTracker(), artifacts=store, checkpoint_every=1)
+        _spec(workers=1), data=_data(), tracker=InMemoryTracker(), artifacts=store, checkpoint_every=1
+    )
     assert LAUNCH in store.list(result.run_id)
     launch = load_launch(store, result.run_id)
     assert launch.launcher == "ray" and launch.attempt == 1 and launch.checkpoint_every == 1
@@ -407,16 +417,25 @@ def test_finished_ray_run_drops_its_ray_storage(tmp_path):
     # The final weights are in model.pt; Ray's copies (checkpoints + final) are dead weight.
     store = InMemoryArtifactStore()
     result = RayLauncher(storage_path=tmp_path / "ray").launch(
-        _spec(workers=1, **{"training.epochs": 3}), data=_data(), tracker=InMemoryTracker(), artifacts=store,
-        checkpoint_every=1)
+        _spec(workers=1, **{"training.epochs": 3}),
+        data=_data(),
+        tracker=InMemoryTracker(),
+        artifacts=store,
+        checkpoint_every=1,
+    )
     assert not _ray_run_dir(tmp_path / "ray", result.run_id).exists()
     assert load_bundle(store, result.run_id).manifest.status == "FINISHED"
 
 
 def test_ray_keeps_only_the_latest_checkpoint(tmp_path):
     result = RayLauncher(storage_path=tmp_path / "ray").launch(
-        _spec(workers=1, **{"training.epochs": 3}), data=_data(), tracker=InMemoryTracker(),
-        artifacts=InMemoryArtifactStore(), checkpoint_every=1, keep_checkpoint=True)
+        _spec(workers=1, **{"training.epochs": 3}),
+        data=_data(),
+        tracker=InMemoryTracker(),
+        artifacts=InMemoryArtifactStore(),
+        checkpoint_every=1,
+        keep_checkpoint=True,
+    )
     assert len([p for p in _ray_run_dir(tmp_path / "ray", result.run_id).glob("checkpoint_*") if p.is_dir()]) == 1
 
 
@@ -425,19 +444,30 @@ def test_ray_resume_with_another_keep_best_is_refused(tmp_path):
 
     store, spec = InMemoryArtifactStore(), _spec(workers=1)
     run_id = compute_run_id(compute_experiment_id(spec), spec.resources, 1)
-    save_launch(store, run_id, LaunchRecord(launcher="ray", attempt=1, checkpoint_every=1,
-                                            storage_path=str(tmp_path / "ray"), keep_best="val/loss:min"))
+    save_launch(
+        store,
+        run_id,
+        LaunchRecord(
+            launcher="ray", attempt=1, checkpoint_every=1, storage_path=str(tmp_path / "ray"), keep_best="val/loss:min"
+        ),
+    )
     with pytest.raises(RunnerError, match="val/loss:min"):
         RayLauncher(storage_path=tmp_path / "ray").launch(
-            spec, data=_data(), tracker=InMemoryTracker(), artifacts=store, resume=True,
-            keep_best=BestCriterion(metric="val/loss", mode="max"))
+            spec,
+            data=_data(),
+            tracker=InMemoryTracker(),
+            artifacts=store,
+            resume=True,
+            keep_best=BestCriterion(metric="val/loss", mode="max"),
+        )
 
 
 def test_ray_resume_without_a_checkpoint_is_refused_before_starting(tmp_path):
     tracker = InMemoryTracker()
     with pytest.raises(RunnerError, match="no Ray checkpoint"):
         RayLauncher(storage_path=tmp_path / "ray").launch(
-            _spec(workers=1), data=_data(), tracker=tracker, artifacts=InMemoryArtifactStore(), resume=True)
+            _spec(workers=1), data=_data(), tracker=tracker, artifacts=InMemoryArtifactStore(), resume=True
+        )
     assert tracker.runs == []
 
 

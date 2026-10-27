@@ -40,16 +40,16 @@ def base_spec():
 
 
 def _pin(spec, commit: str, digest: str = DIGEST):
-    return spec.model_copy(update={
-        "code": spec.code.model_copy(update={"commit": commit}),
-        "environment": spec.environment.model_copy(update={"image_digest": digest}),
-    })
+    return spec.model_copy(
+        update={
+            "code": spec.code.model_copy(update={"commit": commit}),
+            "environment": spec.environment.model_copy(update={"image_digest": digest}),
+        }
+    )
 
 
 def _git(repo: Path, *args: str) -> str:
-    return subprocess.run(
-        ["git", "-C", str(repo), *args], check=True, capture_output=True, text=True
-    ).stdout.strip()
+    return subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, text=True).stdout.strip()
 
 
 @pytest.fixture
@@ -166,8 +166,9 @@ def test_capture_records_versions_and_hardware(repo, base_spec):
     assert "pydantic" in env.packages
     assert env.torch_threads == torch.get_num_threads()
     assert env.cuda == torch.version.cuda
-    assert env.gpus == ([torch.cuda.get_device_name(i) for i in range(torch.cuda.device_count())]
-                        if torch.cuda.is_available() else [])
+    assert env.gpus == (
+        [torch.cuda.get_device_name(i) for i in range(torch.cuda.device_count())] if torch.cuda.is_available() else []
+    )
     assert env.code.head == _git(repo, "rev-parse", "HEAD")
 
 
@@ -189,7 +190,13 @@ def test_probe_is_picklable_for_ray_workers(repo):
 def test_verify_is_pure_domain_logic(base_spec):
     spec = _pin(base_spec, "a" * 40)
     env = RunEnvironment(
-        python="3.12.0", platform="test", packages={}, cuda=None, cudnn=None, gpus=[], torch_threads=1,
+        python="3.12.0",
+        platform="test",
+        packages={},
+        cuda=None,
+        cudnn=None,
+        gpus=[],
+        torch_threads=1,
         code=CodeState(source="git", head="b" * 40, pinned_found=True, changed=[]),
         image_digest=DIGEST,
     )
@@ -213,9 +220,12 @@ class FixedProbe:
         import os
 
         return RunEnvironment(
-            python="3.12.0", platform=f"pid={os.getpid()}", packages={"torch": "2.x"},
+            python="3.12.0",
+            platform=f"pid={os.getpid()}",
+            packages={"torch": "2.x"},
             torch_threads=torch.get_num_threads(),
-            code=CodeState(source="git", head=spec.code.commit, pinned_found=True,
-                           changed=[] if self.commit_ok else ["mlops/x.py"]),
+            code=CodeState(
+                source="git", head=spec.code.commit, pinned_found=True, changed=[] if self.commit_ok else ["mlops/x.py"]
+            ),
             image_digest=self.digest,
         )

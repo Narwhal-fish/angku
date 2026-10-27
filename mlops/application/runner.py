@@ -141,8 +141,7 @@ def resolve_device(resources: Resources, override: str | None = None) -> torch.d
     if resources.gpu > 0:
         if not torch.cuda.is_available():
             raise RunnerError(
-                f"spec requests gpu={resources.gpu} but CUDA is not available; "
-                "pass device='cpu' to override"
+                f"spec requests gpu={resources.gpu} but CUDA is not available; pass device='cpu' to override"
             )
         return torch.device("cuda")
     return torch.device("cpu")
@@ -176,9 +175,7 @@ class ShardSampler(Sampler[int]):
         return len(range(self.rank, self.n, self.world_size))
 
 
-def _loader(
-    dataset, *, batch_size: int, shuffle: bool, seed: int, worker: Worker
-) -> DataLoader[Sample]:
+def _loader(dataset, *, batch_size: int, shuffle: bool, seed: int, worker: Worker) -> DataLoader[Sample]:
     if worker.world_size == 1:
         g = torch.Generator().manual_seed(seed)
         return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, generator=g, drop_last=False)
@@ -186,9 +183,7 @@ def _loader(
         shard = ShardSampler(len(dataset), rank=worker.rank, world_size=worker.world_size)
         return DataLoader(dataset, batch_size=batch_size, sampler=shard, drop_last=False)
     # DistributedSampler is a pure function of (seed, epoch): nothing to checkpoint.
-    sampler = DistributedSampler(
-        dataset, num_replicas=worker.world_size, rank=worker.rank, shuffle=shuffle, seed=seed
-    )
+    sampler = DistributedSampler(dataset, num_replicas=worker.world_size, rank=worker.rank, shuffle=shuffle, seed=seed)
     return DataLoader(dataset, batch_size=batch_size, sampler=sampler, drop_last=False)
 
 
@@ -422,11 +417,16 @@ def train_worker(
             if found is not None and found[0] == epoch:  # a copy: the live weights keep training
                 best_state = {k: v.detach().to("cpu", copy=True) for k, v in model.state_dict().items()}
         if checkpoint_every and on_checkpoint is not None and epoch % checkpoint_every == 0:
-            on_checkpoint(TrainState(
-                epoch=epoch, history=list(history), model_state=model.state_dict(),
-                optimizer_state=optimizer.state_dict(), rng=_capture_rng(loaders),
-                best_model_state=best_state,
-            ))
+            on_checkpoint(
+                TrainState(
+                    epoch=epoch,
+                    history=list(history),
+                    model_state=model.state_dict(),
+                    optimizer_state=optimizer.state_dict(),
+                    rng=_capture_rng(loaders),
+                    best_model_state=best_state,
+                )
+            )
     return model, history, best_state
 
 
@@ -554,34 +554,61 @@ def run_experiment(
         if not spec_saved:  # a killed run never reaches save_bundle; resume needs the spec
             save_spec(artifacts, run_id, spec)
             spec_saved = True
-        save_checkpoint(artifacts, Checkpoint(
-            experiment_id=experiment_id, run_id=run_id, attempt=attempt, checkpoint_every=checkpoint_every,
-            state=state, environment=environment, resumes=resumes, keep_best=keep_best,
-        ))
+        save_checkpoint(
+            artifacts,
+            Checkpoint(
+                experiment_id=experiment_id,
+                run_id=run_id,
+                attempt=attempt,
+                checkpoint_every=checkpoint_every,
+                state=state,
+                environment=environment,
+                resumes=resumes,
+                keep_best=keep_best,
+            ),
+        )
 
     try:
         model, _, best_state = train_worker(
-            spec, data=data, device=dev, on_start=on_start, on_epoch=on_epoch, on_data=on_data,
+            spec,
+            data=data,
+            device=dev,
+            on_start=on_start,
+            on_epoch=on_epoch,
+            on_data=on_data,
             resume_from=ckpt.state if ckpt is not None else None,
-            checkpoint_every=checkpoint_every, on_checkpoint=on_checkpoint, keep_best=keep_best,
+            checkpoint_every=checkpoint_every,
+            on_checkpoint=on_checkpoint,
+            keep_best=keep_best,
         )
     except BaseException:
         if started:
             tracker.end_run("FAILED")
             if artifacts is not None:
-                save_bundle(artifacts, spec=spec, manifest=_manifest("FAILED"), model_state=None,
-                            split=assignment)
+                save_bundle(artifacts, spec=spec, manifest=_manifest("FAILED"), model_state=None, split=assignment)
         raise
     tracker.end_run("FINISHED")
     if artifacts is not None:
-        save_bundle(artifacts, spec=spec, manifest=_manifest("FINISHED"), model_state=model.state_dict(),
-                    best_state=best_state, split=assignment)
+        save_bundle(
+            artifacts,
+            spec=spec,
+            manifest=_manifest("FINISHED"),
+            model_state=model.state_dict(),
+            best_state=best_state,
+            split=assignment,
+        )
         if not keep_checkpoint:  # after the FINISHED manifest landed: a crash in between only leaves it
             artifacts.delete(run_id, CHECKPOINT)
 
     return RunResult(
-        experiment_id=experiment_id, run_id=run_id, device=str(dev), history=history,
-        environment=environment, data_snapshot=data_snapshot, resumes=resumes, split=assignment,
+        experiment_id=experiment_id,
+        run_id=run_id,
+        device=str(dev),
+        history=history,
+        environment=environment,
+        data_snapshot=data_snapshot,
+        resumes=resumes,
+        split=assignment,
     )
 
 

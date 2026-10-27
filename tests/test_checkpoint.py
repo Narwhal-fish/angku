@@ -33,11 +33,13 @@ def _load_experiments():
 def spec():
     """4 epochs with a random augmentation, so the resumed RNG state actually matters."""
     base = load_experiment_yaml(CONFIGS / "tiny_cnn_smoke.yaml")
-    return load_experiment_dict({
-        **base.model_dump(),
-        "training": {**base.training.model_dump(), "epochs": 4},
-        "augmentation": [{"name": "rand_flip", "params": {"prob": 0.5, "spatial_axis": [0, 1, 2]}}],
-    })
+    return load_experiment_dict(
+        {
+            **base.model_dump(),
+            "training": {**base.training.model_dump(), "epochs": 4},
+            "augmentation": [{"name": "rand_flip", "params": {"prob": 0.5, "spatial_axis": [0, 1, 2]}}],
+        }
+    )
 
 
 def _data() -> SyntheticBlobs:
@@ -78,8 +80,9 @@ class KilledStore(InMemoryArtifactStore):
 
 def _interrupt(spec, store, *, fail_at=3, every=2, tracker=None, **kw):
     with pytest.raises(_Interrupted):
-        run_experiment(spec, data=_data(), tracker=tracker or FlakyTracker(fail_at), artifacts=store,
-                       checkpoint_every=every, **kw)
+        run_experiment(
+            spec, data=_data(), tracker=tracker or FlakyTracker(fail_at), artifacts=store, checkpoint_every=every, **kw
+        )
     if isinstance(store, KilledStore):
         assert MANIFEST not in store.list(next(iter(store._runs)))
         store.revive()
@@ -91,8 +94,9 @@ def _interrupt(spec, store, *, fail_at=3, every=2, tracker=None, **kw):
 def test_checkpoint_written_every_n_epochs(spec):
     store = InMemoryArtifactStore()
     spec = spec.model_copy(update={"training": spec.training.model_copy(update={"epochs": 3})})
-    result = run_experiment(spec, data=_data(), tracker=InMemoryTracker(), artifacts=store, checkpoint_every=2,
-                            keep_checkpoint=True)
+    result = run_experiment(
+        spec, data=_data(), tracker=InMemoryTracker(), artifacts=store, checkpoint_every=2, keep_checkpoint=True
+    )
     ckpt = load_checkpoint(store, result.run_id)
     assert ckpt.epoch == 2
     assert ckpt.history == result.history[:2]
@@ -122,8 +126,9 @@ def test_checkpoint_every_needs_an_artifact_store(spec):
 
 def test_checkpoint_every_must_be_positive(spec):
     with pytest.raises(RunnerError, match="checkpoint_every"):
-        run_experiment(spec, data=_data(), tracker=InMemoryTracker(), artifacts=InMemoryArtifactStore(),
-                       checkpoint_every=0)
+        run_experiment(
+            spec, data=_data(), tracker=InMemoryTracker(), artifacts=InMemoryArtifactStore(), checkpoint_every=0
+        )
 
 
 def test_spec_is_stored_with_the_first_checkpoint(spec):
@@ -168,8 +173,9 @@ def test_resume_twice_records_both_points(spec):
 def test_resume_keeps_checkpointing_at_the_stored_interval(spec):
     store = InMemoryArtifactStore()
     _interrupt(spec, store, fail_at=3, every=2)
-    result = run_experiment(spec, data=_data(), tracker=InMemoryTracker(), artifacts=store, resume=True,
-                            keep_checkpoint=True)
+    result = run_experiment(
+        spec, data=_data(), tracker=InMemoryTracker(), artifacts=store, resume=True, keep_checkpoint=True
+    )
     assert load_checkpoint(store, result.run_id).epoch == 4
 
 
@@ -188,8 +194,9 @@ def test_resumed_bundle_reproduces_from_scratch(spec):
     store = InMemoryArtifactStore()
     _interrupt(spec, store)
     result = run_experiment(spec, data=_data(), tracker=InMemoryTracker(), artifacts=store, resume=True)
-    report = reproduce_run(store, result.run_id, data=_data(), tracker=InMemoryTracker(),
-                           scratch=InMemoryArtifactStore())
+    report = reproduce_run(
+        store, result.run_id, data=_data(), tracker=InMemoryTracker(), scratch=InMemoryArtifactStore()
+    )
     assert report.ok, report.mismatches
 
 
@@ -198,8 +205,9 @@ def test_environment_is_recorded_per_segment(spec):
 
     store = InMemoryArtifactStore()
     _interrupt(spec, store, probe=FixedProbe(commit_ok=True))
-    run_experiment(spec, data=_data(), tracker=InMemoryTracker(), artifacts=store, resume=True,
-                   probe=FixedProbe(commit_ok=False))
+    run_experiment(
+        spec, data=_data(), tracker=InMemoryTracker(), artifacts=store, resume=True, probe=FixedProbe(commit_ok=False)
+    )
     m = load_bundle(store, next(iter(store._runs))).manifest
     # The first segment's record survives the interruption; the resumed one is recorded separately.
     assert m.environment.checks["code.commit"].status == "ok"
@@ -224,8 +232,9 @@ def test_resume_without_checkpoint_is_refused(spec):
 def test_resume_of_a_finished_run_is_refused(spec, keep):
     # Whether or not the checkpoint survived, the reason to give is "already FINISHED".
     store = InMemoryArtifactStore()
-    run_experiment(spec, data=_data(), tracker=InMemoryTracker(), artifacts=store, checkpoint_every=1,
-                   keep_checkpoint=keep)
+    run_experiment(
+        spec, data=_data(), tracker=InMemoryTracker(), artifacts=store, checkpoint_every=1, keep_checkpoint=keep
+    )
     tracker = InMemoryTracker()
     with pytest.raises(RunnerError, match="already FINISHED"):
         run_experiment(spec, data=_data(), tracker=tracker, artifacts=store, resume=True)
@@ -257,8 +266,9 @@ def test_finished_run_drops_its_checkpoint(spec):
 
 def test_keep_checkpoint_keeps_it(spec):
     store = InMemoryArtifactStore()
-    result = run_experiment(spec, data=_data(), tracker=InMemoryTracker(), artifacts=store, checkpoint_every=1,
-                            keep_checkpoint=True)
+    result = run_experiment(
+        spec, data=_data(), tracker=InMemoryTracker(), artifacts=store, checkpoint_every=1, keep_checkpoint=True
+    )
     assert load_checkpoint(store, result.run_id).epoch == spec.training.epochs
 
 

@@ -49,16 +49,44 @@ def test_image_is_built_through_the_clean_tree_check():
     assert 'scripts/build-image.sh "$IMAGE" --cpu --push' in SCRIPTS["kind-verify.sh"]
 
 
-@pytest.mark.parametrize("argv", [
-    ["rayjob", "s.yaml", "--attempt", "1", "--artifacts-pvc", "a", "--ray-storage-pvc", "r",
-     "--checkpoint-every", "2", "--submit", "--kubectl", "kubectl --context kind-mlops"],
-    ["rayjob", "s.yaml", "--attempt", "1", "--artifacts-pvc", "a", "--ray-storage-pvc", "r",
-     "--resume", "--submit", "--kubectl", "k"],
-    ["rayjob-status", "job", "--kubectl", "k", "--json"],
-    ["rayjob-logs", "job", "--kubectl", "k"],
-    ["list", "--artifacts", ".kind/artifacts", "--json"],
-    ["ui", "--artifacts", ".kind/artifacts", "--kubectl", "k"],
-])
+@pytest.mark.parametrize(
+    "argv",
+    [
+        [
+            "rayjob",
+            "s.yaml",
+            "--attempt",
+            "1",
+            "--artifacts-pvc",
+            "a",
+            "--ray-storage-pvc",
+            "r",
+            "--checkpoint-every",
+            "2",
+            "--submit",
+            "--kubectl",
+            "kubectl --context kind-mlops",
+        ],
+        [
+            "rayjob",
+            "s.yaml",
+            "--attempt",
+            "1",
+            "--artifacts-pvc",
+            "a",
+            "--ray-storage-pvc",
+            "r",
+            "--resume",
+            "--submit",
+            "--kubectl",
+            "k",
+        ],
+        ["rayjob-status", "job", "--kubectl", "k", "--json"],
+        ["rayjob-logs", "job", "--kubectl", "k"],
+        ["list", "--artifacts", ".kind/artifacts", "--json"],
+        ["ui", "--artifacts", ".kind/artifacts", "--kubectl", "k"],
+    ],
+)
 def test_mlops_command_lines_of_the_verify_script_parse(argv):
     build_parser().parse_args(argv)
 

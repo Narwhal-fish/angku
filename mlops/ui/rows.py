@@ -70,8 +70,9 @@ def run_row(r: RunSummary, metric: str | None) -> tuple[str, ...]:
     return (r.run_id[:12], attempt, r.status, epochs, *value, "; ".join(notes))
 
 
-def overview_rows(s: RunSummary, *, spec: ExperimentSpec | None, manifest: RunManifest | None,
-                  now: float | None = None) -> list[tuple[str, str]]:
+def overview_rows(
+    s: RunSummary, *, spec: ExperimentSpec | None, manifest: RunManifest | None, now: float | None = None
+) -> list[tuple[str, str]]:
     """``now`` (unix seconds) ages a RUNNING run's heartbeat."""
     rows = [("name", s.name)]
     if spec is not None and spec.meta.description:
@@ -86,16 +87,26 @@ def overview_rows(s: RunSummary, *, spec: ExperimentSpec | None, manifest: RunMa
         ("device", manifest.device if manifest is not None else "—"),
     ]
     if s.status == "RUNNING" and s.updated is not None and now is not None:
-        rows.append(("progress", f"epoch {s.epochs_done} / {s.epochs_total or '?'}, "
-                                 f"heartbeat {max(0, now - s.updated):.0f}s ago"))
+        rows.append(
+            (
+                "progress",
+                f"epoch {s.epochs_done} / {s.epochs_total or '?'}, heartbeat {max(0, now - s.updated):.0f}s ago",
+            )
+        )
     if s.resumes and manifest is not None:
         rows.append(("resumed", ", ".join(f"after epoch {p.epoch}" for p in manifest.resumes)))
     if s.resumable:
         rows.append(("resumable", f"yes: mlops resume {s.run_id} --artifacts <DIR>"))
     if s.best is not None:
         b = s.best
-        rows.append(("best", f"{b.metric} ({b.mode}) never defined" if b.epoch is None
-                     else f"{b.metric} ({b.mode}) = {format_number(b.value)} at epoch {b.epoch}"))
+        rows.append(
+            (
+                "best",
+                f"{b.metric} ({b.mode}) never defined"
+                if b.epoch is None
+                else f"{b.metric} ({b.mode}) = {format_number(b.value)} at epoch {b.epoch}",
+            )
+        )
     if spec is not None and spec.split is not None:
         counts = f"{split_counts(manifest.split)}; " if manifest is not None and manifest.split else ""
         rows.append(("split", counts + split_rule(spec.split)))
@@ -152,8 +163,15 @@ RAYJOB_COLUMNS = ("NAME", "RUN", "JOB", "DEPLOYMENT", "STARTED", "ENDED", "BUNDL
 
 def rayjob_row(j: RayJobStatus, *, in_store: bool) -> tuple[str, ...]:
     """BUNDLE = "here" when the job's run is in this artifacts dir (o opens it)."""
-    return (j.name, j.run_id[:12] if j.run_id else "-", j.job_status or "-", j.deployment_status or "-",
-            j.start_time or "-", j.end_time or "-", "here" if in_store else "")
+    return (
+        j.name,
+        j.run_id[:12] if j.run_id else "-",
+        j.job_status or "-",
+        j.deployment_status or "-",
+        j.start_time or "-",
+        j.end_time or "-",
+        "here" if in_store else "",
+    )
 
 
 def rayjob_detail_rows(j: RayJobStatus) -> list[tuple[str, str]]:

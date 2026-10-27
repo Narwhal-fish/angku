@@ -44,7 +44,8 @@ class LocalEnvironmentProbe:
             cuda=torch.version.cuda,
             cudnn=torch.backends.cudnn.version() if torch.backends.cudnn.is_available() else None,
             gpus=[torch.cuda.get_device_name(i) for i in range(torch.cuda.device_count())]
-            if torch.cuda.is_available() else [],
+            if torch.cuda.is_available()
+            else [],
             torch_threads=torch.get_num_threads(),
             code=self._code_state(spec.code.commit),
             image_digest=self.environ.get(IMAGE_DIGEST_ENV) or None,
@@ -69,9 +70,7 @@ class LocalEnvironmentProbe:
     def _git(self, *args: str, cwd: str | None = None) -> str | None:
         """stdout, or None if git is missing or the command fails."""
         try:
-            r = subprocess.run(
-                ["git", *args], cwd=cwd or self.repo, capture_output=True, text=True, timeout=30
-            )
+            r = subprocess.run(["git", *args], cwd=cwd or self.repo, capture_output=True, text=True, timeout=30)
         except (OSError, subprocess.SubprocessError):
             return None
         return r.stdout.strip() if r.returncode == 0 else None

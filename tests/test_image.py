@@ -113,8 +113,13 @@ def docker(tmp_path) -> Path:
 
 def _build(repo: Path, docker_log: Path, *args: str) -> subprocess.CompletedProcess:
     env = {**os.environ, "PATH": f"{docker_log.parent / 'bin'}:{os.environ['PATH']}"}
-    return subprocess.run(["bash", str(repo / "scripts" / "build-image.sh"), *args],
-                          capture_output=True, text=True, env=env, cwd=repo / "experiments")
+    return subprocess.run(
+        ["bash", str(repo / "scripts" / "build-image.sh"), *args],
+        capture_output=True,
+        text=True,
+        env=env,
+        cwd=repo / "experiments",
+    )
 
 
 def _head(repo: Path) -> str:

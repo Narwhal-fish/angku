@@ -16,6 +16,16 @@ env:
   MLFLOW_DISABLE_AGENT_HINT: "1"
 
 jobs:
+  # Same ruff as the dev extra's pin (tests/test_ci.py checks they agree).
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+      - run: uvx ruff@0.17.0 check --output-format github .
+      - run: uvx ruff@0.17.0 format --check .
+
   # Everything installed (dev = mlflow + ray[train] + textual, plus medical = MONAI): every test
   # must run, so a skip here means an extra failed to import and fails the job.
   full:

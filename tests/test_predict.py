@@ -17,7 +17,7 @@ from mlops.adapters.inmemory_tracker import InMemoryTracker
 from mlops.adapters.local_artifacts import LocalArtifactStore
 from mlops.adapters.synthetic_data import SyntheticBlobs
 from mlops.application import run_experiment
-from mlops.application.bundle import MANIFEST, save_bundle, load_bundle
+from mlops.application.bundle import load_bundle, save_bundle
 from mlops.application.listing import list_runs
 from mlops.application.predict import (
     PREDICTIONS,
@@ -64,8 +64,13 @@ WITH_TEST = {"kind": "holdout", "val": 0.2, "test": 0.3}  # 10 cases: test 3, va
 @pytest.fixture
 def trained():
     store = InMemoryArtifactStore()
-    r = run_experiment(_spec(split=WITH_TEST), data=_data(), tracker=InMemoryTracker(), artifacts=store,
-                       keep_best=BestCriterion.parse("val/loss:min"))
+    r = run_experiment(
+        _spec(split=WITH_TEST),
+        data=_data(),
+        tracker=InMemoryTracker(),
+        artifacts=store,
+        keep_best=BestCriterion.parse("val/loss:min"),
+    )
     return store, r
 
 
@@ -172,8 +177,11 @@ def test_refuses_wrong_data():
 
 
 def test_mean_skips_undefined_cases():
-    rows = [CaseResult(case="a", metrics={"d": 1.0}), CaseResult(case="b", metrics={"d": math.nan}),
-            CaseResult(case="c", metrics={"d": 0.0})]
+    rows = [
+        CaseResult(case="a", metrics={"d": 1.0}),
+        CaseResult(case="b", metrics={"d": math.nan}),
+        CaseResult(case="c", metrics={"d": 0.0}),
+    ]
     assert mean_metrics(rows) == {"d": 0.5}
     assert math.isnan(mean_metrics([rows[1]])["d"])
 

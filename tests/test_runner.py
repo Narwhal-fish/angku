@@ -91,9 +91,7 @@ def test_augmentations_are_built_and_applied(spec):
 
             return aug
 
-    spec = load_experiment_dict(
-        {**spec.model_dump(), "augmentation": [{"name": "_test_identity", "params": {}}]}
-    )
+    spec = load_experiment_dict({**spec.model_dump(), "augmentation": [{"name": "_test_identity", "params": {}}]})
     run_experiment(spec, data=_data(), tracker=InMemoryTracker())
     assert sum(calls) == 4  # every training sample went through the augmentation once
 
@@ -201,6 +199,12 @@ def test_swinunetr_baseline_stack_trains_on_synthetic_data():
 # --- per-worker training loop (what a distributed launcher runs on every rank) ---
 
 
+# Set by the tests that register them: a registered component outlives one test, so it reads these.
+_COUNT_SEEN: dict[int, list[int]] = {}
+_COUNT_RANK: dict[str, int] = {}
+_INFER_CALLS: list[tuple[int, ...]] = []
+
+
 def test_train_worker_shards_data_by_rank(spec):
     from mlops.application.runner import Worker, train_worker
 
@@ -220,7 +224,8 @@ def test_train_worker_shards_data_by_rank(spec):
 
             return aug
 
-    globals()["_COUNT_SEEN"], globals()["_COUNT_RANK"] = seen, current
+    global _COUNT_SEEN, _COUNT_RANK
+    _COUNT_SEEN, _COUNT_RANK = seen, current
     spec = load_experiment_dict(
         {
             **spec.model_dump(),
@@ -345,7 +350,9 @@ def test_failed_run_still_records_the_environment(spec):
     from mlops.application.bundle import load_bundle
     from tests.test_environment import FixedProbe
 
-    bad = spec.model_copy(update={"model": spec.model.model_copy(update={"params": {**spec.model.params, "in_channels": 3}})})
+    bad = spec.model_copy(
+        update={"model": spec.model.model_copy(update={"params": {**spec.model.params, "in_channels": 3}})}
+    )
     store = InMemoryArtifactStore()
     with pytest.raises(RuntimeError):
         run_experiment(bad, data=_data(), tracker=InMemoryTracker(), artifacts=store, probe=FixedProbe())
@@ -381,7 +388,11 @@ def test_metrics_are_logged_under_val_prefix(spec):
     tracker = InMemoryTracker()
     result = run_experiment(spec, data=_data(), tracker=tracker)
     assert set(result.final_metrics) == {
-        "train/loss", "val/loss", "val/dice/bg", "val/dice/blob", "val/dice/mean",
+        "train/loss",
+        "val/loss",
+        "val/dice/bg",
+        "val/dice/blob",
+        "val/dice/mean",
     }
     assert all(0.0 <= result.final_metrics[k] <= 1.0 for k in result.final_metrics if "dice" in k)
     assert tracker.runs[0].metrics == [(1, result.history[0])]
@@ -481,7 +492,8 @@ def _register_counting_inferer(calls: list[tuple[int, ...]]) -> None:
 
             return infer
 
-    globals()["_INFER_CALLS"] = calls
+    global _INFER_CALLS
+    _INFER_CALLS = calls
     calls.clear()
 
 
@@ -510,12 +522,17 @@ def test_unknown_inferer_is_refused_before_the_run_starts(spec):
 
 def test_sliding_window_validation_end_to_end(spec):
     pytest.importorskip("monai", reason="medical extra not installed")
-    spec = load_experiment_dict({
-        **spec.model_dump(),
-        "training": {**spec.training.model_dump(), "epochs": 2},
-        "inference": {"name": "sliding_window", "params": {"roi_size": [4, 4, 4], "overlap": 0.5, "mode": "gaussian"}},
-        "metrics": [{"name": "dice", "params": {"include_background": False}}],
-    })
+    spec = load_experiment_dict(
+        {
+            **spec.model_dump(),
+            "training": {**spec.training.model_dump(), "epochs": 2},
+            "inference": {
+                "name": "sliding_window",
+                "params": {"roi_size": [4, 4, 4], "overlap": 0.5, "mode": "gaussian"},
+            },
+            "metrics": [{"name": "dice", "params": {"include_background": False}}],
+        }
+    )
     a = run_experiment(spec, data=_data(), tracker=InMemoryTracker())
     b = run_experiment(spec, data=_data(), tracker=InMemoryTracker())
     assert a.history == b.history

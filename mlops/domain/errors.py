@@ -7,6 +7,4 @@ class UnpinnedInputError(DomainError):
 
     def __init__(self, missing: list[str]) -> None:
         self.missing = missing
-        super().__init__(
-            "cannot compute ExperimentID: unpinned inputs: " + ", ".join(missing)
-        )
+        super().__init__("cannot compute ExperimentID: unpinned inputs: " + ", ".join(missing))

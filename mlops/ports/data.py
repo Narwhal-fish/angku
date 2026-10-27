@@ -45,9 +45,7 @@ class DataProvider(Protocol):
         without this method serves its own split and refuses a spec that sets one)."""
         ...
 
-    def load(
-        self, dataset: Dataset, preprocessing: dict[str, Any], split: SplitAssignment | None = None
-    ) -> DataSplits:
+    def load(self, dataset: Dataset, preprocessing: dict[str, Any], split: SplitAssignment | None = None) -> DataSplits:
         """Return the splits for ``dataset`` at its pinned snapshot: the cases ``split`` names
         (ids from ``cases``) or, when None, the provider's own split. Called with ``split`` only
         when the spec sets one.

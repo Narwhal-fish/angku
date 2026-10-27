@@ -16,12 +16,9 @@ import importlib
 import pkgutil
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Generic, TypeVar
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, ValidationError
-
-T = TypeVar("T")
-P = TypeVar("P", bound="Params")
 
 
 class Params(BaseModel):
@@ -39,37 +36,32 @@ class RegistryError(Exception):
 
 
 @dataclass(frozen=True)
-class Entry(Generic[T]):
+class Entry[T]:
     name: str
     factory: Callable[[Any], T]
     params_schema: type[Params]
 
 
-class Registry(Generic[T]):
+class Registry[T]:
     def __init__(self, kind: str) -> None:
         self.kind = kind
         self._entries: dict[str, Entry[T]] = {}
 
     # -- registration --------------------------------------------------------
 
-    def register(
-        self, name: str, *, params: type[Params]
-    ) -> Callable[[Callable[[Any], T]], Callable[[Any], T]]:
+    def register(self, name: str, *, params: type[Params]) -> Callable[[Callable[[Any], T]], Callable[[Any], T]]:
         """Decorator: ``@MODELS.register("swinunetr", params=SwinUNETRParams)``.
 
         The decorated factory receives one argument: a validated ``params`` instance.
         """
         if not isinstance(params, type) or not issubclass(params, Params):
-            raise RegistryError(
-                f"{self.kind} {name!r}: params must be a subclass of mlops.registry.Params"
-            )
+            raise RegistryError(f"{self.kind} {name!r}: params must be a subclass of mlops.registry.Params")
 
         def deco(factory: Callable[[Any], T]) -> Callable[[Any], T]:
             if name in self._entries:
                 existing = self._entries[name].factory
                 raise RegistryError(
-                    f"{self.kind} {name!r} already registered by "
-                    f"{existing.__module__}.{existing.__qualname__}"
+                    f"{self.kind} {name!r} already registered by {existing.__module__}.{existing.__qualname__}"
                 )
             self._entries[name] = Entry(name=name, factory=factory, params_schema=params)
             return factory

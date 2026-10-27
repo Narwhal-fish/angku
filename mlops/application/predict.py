@@ -64,8 +64,10 @@ REPORT = "report.md"
 PREDICTIONS = "predictions"
 UNCERTAINTY = "uncertainty"
 
-VAL_NOTE = ("val was seen during training (val/loss every epoch, keep-best chose its epoch on it): "
-            "these numbers are optimistic; use a test split for an unbiased estimate")
+VAL_NOTE = (
+    "val was seen during training (val/loss every epoch, keep-best chose its epoch on it): "
+    "these numbers are optimistic; use a test split for an unbiased estimate"
+)
 
 
 class PredictError(Exception):
@@ -94,8 +96,20 @@ def predict_run(
         if mc_samples < 2:
             raise PredictError(f"MC dropout needs at least 2 samples per case, got {mc_samples}")
         mc = {"samples": mc_samples, "seed": mc_seed}
-    return _predict(store, [run_id], kind="predict", vote=None, data=data, part=part, weights=weights,
-                    device=device, probe=probe, save_predictions=save_predictions, out=out, mc=mc)
+    return _predict(
+        store,
+        [run_id],
+        kind="predict",
+        vote=None,
+        data=data,
+        part=part,
+        weights=weights,
+        device=device,
+        probe=probe,
+        save_predictions=save_predictions,
+        out=out,
+        mc=mc,
+    )
 
 
 def ensemble_runs(
@@ -119,8 +133,19 @@ def ensemble_runs(
     The result does not depend on the order the runs are given in."""
     if len(set(run_ids)) != len(run_ids):
         raise PredictError("a run is listed twice: each member votes once")
-    return _predict(store, sorted(run_ids), kind="ensemble", vote=vote, data=data, part=part, weights=weights,
-                    device=device, probe=probe, save_predictions=save_predictions, out=out)
+    return _predict(
+        store,
+        sorted(run_ids),
+        kind="ensemble",
+        vote=vote,
+        data=data,
+        part=part,
+        weights=weights,
+        device=device,
+        probe=probe,
+        save_predictions=save_predictions,
+        out=out,
+    )
 
 
 @dataclass
@@ -138,8 +163,12 @@ def _load(store: ArtifactStore, run_id: str, weights: Weights | None) -> _Loaded
     state = bundle.best_state if chosen == BEST else bundle.model_state
     if state is None:
         raise PredictError(f"run {run_id[:12]} has no {chosen} (keep-best was not asked for)")
-    member = Member(run_id=bundle.manifest.run_id, experiment_id=bundle.manifest.experiment_id,
-                    weights=chosen, epoch=_epoch_of(bundle, chosen))
+    member = Member(
+        run_id=bundle.manifest.run_id,
+        experiment_id=bundle.manifest.experiment_id,
+        weights=chosen,
+        epoch=_epoch_of(bundle, chosen),
+    )
     return _Loaded(bundle, member, state)
 
 
@@ -215,8 +244,9 @@ def _predict(
     method: dict[str, Any] = {"vote": vote} if vote is not None else {}
     if mc is not None:
         method["mc_dropout"] = mc
-    result_id = compute_result_id(kind=kind, members=[m.member for m in members], part=part,
-                                  dataset_snapshot=spec.dataset.snapshot, method=method)
+    result_id = compute_result_id(
+        kind=kind, members=[m.member for m in members], part=part, dataset_snapshot=spec.dataset.snapshot, method=method
+    )
     rows: list[CaseResult] = []
     member_rows: list[list[CaseResult]] = [[] for _ in members]
     for i, case in enumerate(cases):
@@ -249,11 +279,21 @@ def _predict(
                 target.put(result_id, f"{UNCERTAINTY}/{case}.pt", buf.getvalue())
 
     record = PredictionRecord(
-        result_id=result_id, kind=kind, name=spec.meta.name, members=[m.member for m in members], part=part,
-        dataset=spec.dataset.name, data_snapshot=data_check, method=method, device=str(dev),
-        cases=rows, metrics=mean_metrics(rows), environment=environment,
+        result_id=result_id,
+        kind=kind,
+        name=spec.meta.name,
+        members=[m.member for m in members],
+        part=part,
+        dataset=spec.dataset.name,
+        data_snapshot=data_check,
+        method=method,
+        device=str(dev),
+        cases=rows,
+        metrics=mean_metrics(rows),
+        environment=environment,
         member_metrics={m.member.run_id: mean_metrics(r) for m, r in zip(members, member_rows, strict=True)}
-        if kind == "ensemble" else {},
+        if kind == "ensemble"
+        else {},
         notes=[VAL_NOTE] if part == "val" else [],
     )
     target.put(result_id, RESULT, record.model_dump_json(indent=2).encode())
@@ -408,8 +448,12 @@ def prediction_lines(r: PredictionRecord) -> list[str]:
         if "mc_dropout" in r.method:
             mc = r.method["mc_dropout"]
             head += f" with MC dropout ({mc['samples']} samples, seed {mc['seed']})"
-    out = [head, f"  result_id  {r.result_id}", f"  run{'s' if len(r.members) > 1 else ' '}       {_members_line(r)}",
-           f"  {_metric_cells(r.metrics)}"]
+    out = [
+        head,
+        f"  result_id  {r.result_id}",
+        f"  run{'s' if len(r.members) > 1 else ' '}       {_members_line(r)}",
+        f"  {_metric_cells(r.metrics)}",
+    ]
     if r.member_metrics:
         out.append("  each run alone:")
         out += [f"    {run[:12]}  {_metric_cells(m)}" for run, m in r.member_metrics.items()]
@@ -419,7 +463,8 @@ def prediction_lines(r: PredictionRecord) -> list[str]:
 
 def result_line(r: PredictionRecord) -> str:
     """One line of `mlops results`."""
-    return f"{r.result_id[:12]}  {r.name}  {_what(r)} {r.part} ({len(r.cases)})  {_members_line(r)}  {_metric_cells(r.metrics)}"
+    what = f"{_what(r)} {r.part} ({len(r.cases)})"
+    return f"{r.result_id[:12]}  {r.name}  {what}  {_members_line(r)}  {_metric_cells(r.metrics)}"
 
 
 def render_prediction_report(r: PredictionRecord) -> str:
@@ -444,15 +489,27 @@ def render_prediction_report(r: PredictionRecord) -> str:
     lines += ["", "## Mean over cases", "", "| metric | mean |", "|---|---|"]
     lines += [f"| {k} | {_cell(r.metrics[k])} |" for k in keys]
     if "mc_dropout" in r.method:
-        lines += ["", "`uncertainty/entropy`: predictive entropy of the mean probabilities (nats), "
-                      "`uncertainty/variance`: variance of the probabilities across samples; both are "
-                      "voxel means per case. Metrics and loss are of the mean probabilities."]
+        lines += [
+            "",
+            "`uncertainty/entropy`: predictive entropy of the mean probabilities (nats), "
+            "`uncertainty/variance`: variance of the probabilities across samples; both are "
+            "voxel means per case. Metrics and loss are of the mean probabilities.",
+        ]
     if r.member_metrics:
         member_keys = list(next(iter(r.member_metrics.values())))
-        lines += ["", "## Each run alone", "", "Same cases, each run's own prediction: did the vote help?", "",
-                  "| run | " + " | ".join(member_keys) + " |", "|---|" + "---|" * len(member_keys)]
-        lines += [f"| {run[:12]} | " + " | ".join(_cell(m.get(k, math.nan)) for k in member_keys) + " |"
-                  for run, m in r.member_metrics.items()]
+        lines += [
+            "",
+            "## Each run alone",
+            "",
+            "Same cases, each run's own prediction: did the vote help?",
+            "",
+            "| run | " + " | ".join(member_keys) + " |",
+            "|---|" + "---|" * len(member_keys),
+        ]
+        lines += [
+            f"| {run[:12]} | " + " | ".join(_cell(m.get(k, math.nan)) for k in member_keys) + " |"
+            for run, m in r.member_metrics.items()
+        ]
     lines += ["", "## Per case", "", "| case | " + " | ".join(keys) + " |", "|---|" + "---|" * len(keys)]
     lines += [f"| {c.case} | " + " | ".join(_cell(c.metrics.get(k, math.nan)) for k in keys) + " |" for c in r.cases]
     return "\n".join(lines) + "\n"

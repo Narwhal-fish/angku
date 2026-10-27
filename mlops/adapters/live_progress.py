@@ -21,8 +21,14 @@ from mlops.ports.tracking import RunStatus, Tracker
 
 
 class LiveProgress:
-    def __init__(self, inner: Tracker, store: ArtifactStore, *, clock: Callable[[], float] = time.time,
-                 heartbeat: float = HEARTBEAT) -> None:
+    def __init__(
+        self,
+        inner: Tracker,
+        store: ArtifactStore,
+        *,
+        clock: Callable[[], float] = time.time,
+        heartbeat: float = HEARTBEAT,
+    ) -> None:
         self._inner = inner
         self._store = store
         self._clock = clock
@@ -36,8 +42,17 @@ class LiveProgress:
         self._inner.start_run(run_id=run_id, experiment_id=experiment_id, spec=spec, resume=resume)
         save_spec(self._store, run_id, spec)
         now = self._clock()
-        self._write(Progress(run_id=run_id, state="running", epoch=0, epochs=spec.training.epochs,
-                             started=now, updated=now, history=[]))
+        self._write(
+            Progress(
+                run_id=run_id,
+                state="running",
+                epoch=0,
+                epochs=spec.training.epochs,
+                started=now,
+                updated=now,
+                history=[],
+            )
+        )
         self._stop.clear()
         self._thread = threading.Thread(target=self._beat, name="mlops-progress", daemon=True)
         self._thread.start()

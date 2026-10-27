@@ -102,9 +102,7 @@ class MsdSpleen:
             raise DataError(f"MsdSpleen serves {NAME!r}, not {dataset.name!r}")
         return [name for name, _, _ in self._list_cases()]
 
-    def load(
-        self, dataset: Dataset, preprocessing: dict[str, Any], split: SplitAssignment | None = None
-    ) -> DataSplits:
+    def load(self, dataset: Dataset, preprocessing: dict[str, Any], split: SplitAssignment | None = None) -> DataSplits:
         if dataset.name != NAME:
             raise DataError(f"MsdSpleen serves {NAME!r}, not {dataset.name!r}")
         try:
@@ -163,21 +161,23 @@ def _preprocess(pairs: list[tuple[str, Path, Path]], p: SpleenPreprocessing) -> 
     try:
         from monai import transforms as T
     except ImportError as e:
-        raise ImportError(f"dataset {NAME!r} needs MONAI + nibabel: uv pip install -e \".[medical]\"") from e
+        raise ImportError(f'dataset {NAME!r} needs MONAI + nibabel: uv pip install -e ".[medical]"') from e
 
     keys = ["image", "label"]
-    pipeline = T.Compose([
-        T.LoadImaged(keys=keys),
-        T.EnsureChannelFirstd(keys=keys),
-        # labels pinned: MONAI is changing its default, which must not silently move our voxels
-        T.Orientationd(keys=keys, axcodes="RAS", labels=(("L", "R"), ("P", "A"), ("I", "S"))),
-        T.Spacingd(keys=keys, pixdim=p.spacing, mode=("bilinear", "nearest"), dtype=torch.float32),
-        T.ScaleIntensityRanged(
-            keys="image", a_min=p.intensity_range[0], a_max=p.intensity_range[1], b_min=0.0, b_max=1.0, clip=True
-        ),
-        T.CropForegroundd(keys=keys, source_key="image", allow_smaller=True),
-        T.SpatialPadd(keys=keys, spatial_size=p.roi_size),
-    ])
+    pipeline = T.Compose(
+        [
+            T.LoadImaged(keys=keys),
+            T.EnsureChannelFirstd(keys=keys),
+            # labels pinned: MONAI is changing its default, which must not silently move our voxels
+            T.Orientationd(keys=keys, axcodes="RAS", labels=(("L", "R"), ("P", "A"), ("I", "S"))),
+            T.Spacingd(keys=keys, pixdim=p.spacing, mode=("bilinear", "nearest"), dtype=torch.float32),
+            T.ScaleIntensityRanged(
+                keys="image", a_min=p.intensity_range[0], a_max=p.intensity_range[1], b_min=0.0, b_max=1.0, clip=True
+            ),
+            T.CropForegroundd(keys=keys, source_key="image", allow_smaller=True),
+            T.SpatialPadd(keys=keys, spatial_size=p.roi_size),
+        ]
+    )
     cases = []
     for name, image, label in pairs:
         d = pipeline({"image": str(image), "label": str(label)})
@@ -189,8 +189,8 @@ def _preprocess(pairs: list[tuple[str, Path, Path]], p: SpleenPreprocessing) -> 
 
 def _crop(case: Case, centre: Tensor, roi: Vec3i) -> Sample:
     size = case.label.shape
-    start = [min(max(int(c) - r // 2, 0), s - r) for c, r, s in zip(centre.tolist(), roi, size)]
-    sl = tuple(slice(a, a + r) for a, r in zip(start, roi))
+    start = [min(max(int(c) - r // 2, 0), s - r) for c, r, s in zip(centre.tolist(), roi, size, strict=True)]
+    sl = tuple(slice(a, a + r) for a, r in zip(start, roi, strict=True))
     return case.image[(slice(None), *sl)].clone(), case.label[sl].clone()
 
 

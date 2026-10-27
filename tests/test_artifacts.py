@@ -14,9 +14,9 @@ import pytest
 import torch
 from pydantic import ValidationError
 
+from mlops.adapters.inmemory_artifacts import InMemoryArtifactStore
 from mlops.adapters.inmemory_tracker import InMemoryTracker
 from mlops.adapters.local_artifacts import LocalArtifactStore
-from mlops.adapters.inmemory_artifacts import InMemoryArtifactStore
 from mlops.adapters.synthetic_data import SyntheticBlobs
 from mlops.application import run_experiment
 from mlops.application.bundle import MANIFEST, MODEL, SPEC, load_bundle
@@ -100,8 +100,13 @@ def test_local_store_layout_is_run_id_then_name(tmp_path):
 def test_manifest_rejects_typos():
     with pytest.raises(ValidationError):
         RunManifest(
-            experiment_id="e", run_id="r", attempt=1, status="FINISHED", device="cpu",
-            history=[], statuss="x",
+            experiment_id="e",
+            run_id="r",
+            attempt=1,
+            status="FINISHED",
+            device="cpu",
+            history=[],
+            statuss="x",
         )
 
 
@@ -144,7 +149,10 @@ def test_run_can_be_reproduced_from_its_bundle_alone(spec, store):
     # Only the bundle crosses this line.
     again = InMemoryArtifactStore()
     second = run_experiment(
-        bundle.spec, data=_data(), tracker=InMemoryTracker(), artifacts=again,
+        bundle.spec,
+        data=_data(),
+        tracker=InMemoryTracker(),
+        artifacts=again,
         attempt=bundle.manifest.attempt,
     )
 
@@ -160,16 +168,12 @@ def test_failed_run_still_writes_spec_and_manifest(spec, store):
     class ExplodingLoader(SyntheticBlobs):
         def load(self, dataset, preprocessing):
             splits = super().load(dataset, preprocessing)
-            bad = torch.utils.data.TensorDataset(
-                torch.zeros(2, 3, 8, 8, 8), torch.zeros(2, 8, 8, 8, dtype=torch.long)
-            )
+            bad = torch.utils.data.TensorDataset(torch.zeros(2, 3, 8, 8, 8), torch.zeros(2, 8, 8, 8, dtype=torch.long))
             return type(splits)(train=bad, val=splits.val)
 
     tracker = InMemoryTracker()
     with pytest.raises(RuntimeError):
-        run_experiment(
-            spec, data=ExplodingLoader(n_train=2, n_val=0), tracker=tracker, artifacts=store
-        )
+        run_experiment(spec, data=ExplodingLoader(n_train=2, n_val=0), tracker=tracker, artifacts=store)
     run_id = tracker.runs[0].run_id
     assert store.list(run_id) == sorted([MANIFEST, SPEC])
     bundle = load_bundle(store, run_id)
@@ -196,7 +200,11 @@ def test_undefined_metric_survives_the_bundle_roundtrip(store):
 
     spec = load_experiment_yaml(CONFIGS / "tiny_cnn_smoke.yaml")
     manifest = RunManifest(
-        experiment_id="e", run_id="r", attempt=1, status="FAILED", device="cpu",
+        experiment_id="e",
+        run_id="r",
+        attempt=1,
+        status="FAILED",
+        device="cpu",
         history=[{"val/dice/1": float("nan"), "val/loss": 0.5}],
     )
     save_bundle(store, spec=spec, manifest=manifest, model_state=None)

@@ -63,27 +63,27 @@ from mlops.adapters.kuberay import (
     render_rayjob,
     submit_rayjob,
 )
-from mlops.adapters.local_artifacts import LocalArtifactStore
 from mlops.adapters.live_progress import LiveProgress
+from mlops.adapters.local_artifacts import LocalArtifactStore
 from mlops.adapters.local_environment import LocalEnvironmentProbe
 from mlops.adapters.synthetic_data import SyntheticBlobs
 from mlops.application import RunnerError
 from mlops.application.bundle import LAUNCH, MANIFEST, SPEC, load_bundle, load_checkpoint, load_launch
-from mlops.application.launch import Launcher, LocalLauncher
-from mlops.application.runner import RunResult, verify_data
 from mlops.application.diff import RunDiff, diff_lines, diff_runs, format_value
+from mlops.application.launch import Launcher, LocalLauncher
 from mlops.application.listing import ExperimentGroup, group_by_experiment, list_runs
-from mlops.application.progress import PROGRESS, is_live, read_progress
 from mlops.application.predict import (
     PredictError,
     ensemble_runs,
     list_results,
-    prediction_lines,
     predict_run,
+    prediction_lines,
     result_line,
 )
+from mlops.application.progress import PROGRESS, is_live, read_progress
 from mlops.application.report import render_report, split_counts, split_rule, write_report
 from mlops.application.reproduce import ReproduceError, ReproduceReport, reproduce_lines, reproduce_run
+from mlops.application.runner import RunResult, verify_data
 from mlops.config import ConfigError, load_experiment_yaml
 from mlops.domain import ExperimentSpec, RunManifest, UnpinnedInputError, compute_experiment_id, compute_run_id
 from mlops.domain.best import BestCriterion
@@ -171,9 +171,7 @@ def _launcher(spec: ExperimentSpec, args: argparse.Namespace) -> Launcher:
             raise CliError("the Ray launcher needs the 'distributed' extra: uv pip install -e '.[distributed]'") from e
         return RayLauncher(address=args.ray_address, storage_path=args.ray_storage, experiments=args.experiments)
     if spec.resources.workers > 1:
-        raise CliError(
-            f"resources.workers={spec.resources.workers} needs a distributed launcher: pass --launcher ray"
-        )
+        raise CliError(f"resources.workers={spec.resources.workers} needs a distributed launcher: pass --launcher ray")
     return LocalLauncher()
 
 
@@ -211,9 +209,19 @@ def cmd_run(args: argparse.Namespace) -> int:
         if problems:
             raise CliError("--strict-env: run does not verifiably match the pins:\n  " + "\n  ".join(problems))
     store = LocalArtifactStore(args.artifacts) if args.artifacts else None
-    return _launch_and_report(spec, args, launcher, store, attempt=args.attempt, probe=probe, data=data,
-                              tracker=tracker, checkpoint_every=args.checkpoint_every,
-                              keep_checkpoint=args.keep_checkpoint, keep_best=keep_best)
+    return _launch_and_report(
+        spec,
+        args,
+        launcher,
+        store,
+        attempt=args.attempt,
+        probe=probe,
+        data=data,
+        tracker=tracker,
+        checkpoint_every=args.checkpoint_every,
+        keep_checkpoint=args.keep_checkpoint,
+        keep_best=keep_best,
+    )
 
 
 def _keep_best(text: str | None) -> BestCriterion | None:
@@ -231,8 +239,13 @@ def _check_checkpoint_args(args: argparse.Namespace) -> None:
 
 
 def _launch_and_report(
-    spec: ExperimentSpec, args: argparse.Namespace, launcher: Launcher, store: LocalArtifactStore | None,
-    *, attempt: int, **launch: Any,
+    spec: ExperimentSpec,
+    args: argparse.Namespace,
+    launcher: Launcher,
+    store: LocalArtifactStore | None,
+    *,
+    attempt: int,
+    **launch: Any,
 ) -> int:
     """Launch, write report.md, warn about unverified pins, print the summary. Shared by run/resume.
     With a store the run keeps progress.json current while it trains (``mlops ui`` shows it live)."""
@@ -298,8 +311,9 @@ def _print_summary(spec: ExperimentSpec, s: dict[str, Any]) -> None:
         print(f"  artifacts      {s['artifacts']}")
 
 
-def _resume_target(store: LocalArtifactStore, run_id: str, *, ray_address: str | None,
-                   experiments: str) -> tuple[ExperimentSpec, Launcher, int, str]:
+def _resume_target(
+    store: LocalArtifactStore, run_id: str, *, ray_address: str | None, experiments: str
+) -> tuple[ExperimentSpec, Launcher, int, str]:
     """(spec, launcher, attempt, launcher name) to continue ``run_id``; refuses a FINISHED run or
     one with nothing to resume from. Shared by `mlops resume` and `mlops ui`."""
     try:
@@ -315,8 +329,10 @@ def _resume_target(store: LocalArtifactStore, run_id: str, *, ray_address: str |
     progress = read_progress(store, run_id)
     now = time.time()
     if progress is not None and is_live(progress, now=now):
-        raise CliError(f"run {run_id} is RUNNING (heartbeat {now - progress.updated:.0f}s ago): "
-                       "resuming it now would race the live process")
+        raise CliError(
+            f"run {run_id} is RUNNING (heartbeat {now - progress.updated:.0f}s ago): "
+            "resuming it now would race the live process"
+        )
     if LAUNCH in store.list(run_id):
         # A Ray run: its checkpoints live in Ray storage; resume through Ray with the same storage.
         launch = load_launch(store, run_id)
@@ -324,8 +340,12 @@ def _resume_target(store: LocalArtifactStore, run_id: str, *, ray_address: str |
             from mlops.adapters.ray_launcher import RayLauncher
         except ImportError as e:
             raise CliError("this run was launched on Ray; resuming it needs the 'distributed' extra") from e
-        return spec, RayLauncher(address=ray_address, storage_path=launch.storage_path,
-                                 experiments=experiments), launch.attempt, "ray"
+        return (
+            spec,
+            RayLauncher(address=ray_address, storage_path=launch.storage_path, experiments=experiments),
+            launch.attempt,
+            "ray",
+        )
     try:
         attempt = load_checkpoint(store, run_id).attempt
     except ArtifactError:
@@ -339,14 +359,25 @@ def _resume_target(store: LocalArtifactStore, run_id: str, *, ray_address: str |
 def cmd_resume(args: argparse.Namespace) -> int:
     store = LocalArtifactStore(args.artifacts)
     spec, launcher, attempt, args.launcher = _resume_target(
-        store, args.run_id, ray_address=args.ray_address, experiments=args.experiments)
+        store, args.run_id, ray_address=args.ray_address, experiments=args.experiments
+    )
     _check_checkpoint_args(args)
     _discover(args.experiments)
     data = _data_provider(spec, args.data_root)
     tracker = _tracker(spec, args.tracker, args.mlflow_uri)
-    return _launch_and_report(spec, args, launcher, store, attempt=attempt, probe=_probe(), data=data,
-                              tracker=tracker, checkpoint_every=args.checkpoint_every, resume=True,
-                              keep_checkpoint=args.keep_checkpoint)
+    return _launch_and_report(
+        spec,
+        args,
+        launcher,
+        store,
+        attempt=attempt,
+        probe=_probe(),
+        data=data,
+        tracker=tracker,
+        checkpoint_every=args.checkpoint_every,
+        resume=True,
+        keep_checkpoint=args.keep_checkpoint,
+    )
 
 
 def cmd_rayjob(args: argparse.Namespace) -> int:
@@ -358,8 +389,10 @@ def cmd_rayjob(args: argparse.Namespace) -> int:
         )
     if args.checkpoint_every is not None or args.resume:
         # Checkpoints and launch.json must outlive the RayJob's cluster (shutdownAfterJobFinishes).
-        for flag, value, what in (("--artifacts-pvc", args.artifacts_pvc, "spec.json + launch.json"),
-                                  ("--ray-storage-pvc", args.ray_storage_pvc, "Ray Train's checkpoints")):
+        for flag, value, what in (
+            ("--artifacts-pvc", args.artifacts_pvc, "spec.json + launch.json"),
+            ("--ray-storage-pvc", args.ray_storage_pvc, "Ray Train's checkpoints"),
+        ):
             if not value:
                 raise CliError(f"a resumable RayJob needs {flag} PVC ({what} must outlive the job's cluster)")
     try:
@@ -390,8 +423,10 @@ def cmd_rayjob(args: argparse.Namespace) -> int:
             run_id = items[-1]["metadata"]["annotations"]["mlops.io/run-id"]
             busy = active_rayjobs(run_id, namespace=args.namespace, kubectl=kubectl, run=subprocess.run)
             if busy:
-                raise CliError("this run still has a RayJob that has not finished; wait for it or stop it first:\n  "
-                               + "\n  ".join(f"{j.name}: {j.job_status or 'no status yet'}" for j in busy))
+                raise CliError(
+                    "this run still has a RayJob that has not finished; wait for it or stop it first:\n  "
+                    + "\n  ".join(f"{j.name}: {j.job_status or 'no status yet'}" for j in busy)
+                )
         name = submit_rayjob(items, kubectl=kubectl, run=subprocess.run)
     except (KubeRayError, OSError) as e:
         raise CliError(str(e)) from e
@@ -406,14 +441,20 @@ def cmd_rayjob(args: argparse.Namespace) -> int:
 
 def _rayjob_volume_flags(args: argparse.Namespace) -> str:
     """The flags a resume job must repeat: same run (attempt), same claims at the same paths."""
-    flags = [f"--namespace {args.namespace}", f"--attempt {args.attempt}",
-             f"--artifacts-pvc {args.artifacts_pvc}", f"--ray-storage-pvc {args.ray_storage_pvc}"]
+    flags = [
+        f"--namespace {args.namespace}",
+        f"--attempt {args.attempt}",
+        f"--artifacts-pvc {args.artifacts_pvc}",
+        f"--ray-storage-pvc {args.ray_storage_pvc}",
+    ]
     if args.artifacts_path != "/artifacts":
         flags.append(f"--artifacts-path {args.artifacts_path}")
     if args.ray_storage_path != "/ray-storage":
         flags.append(f"--ray-storage-path {args.ray_storage_path}")
     if args.data_pvc:
-        flags.append(f"--data-pvc {args.data_pvc}" + (f" --data-path {args.data_path}" if args.data_path != "/data" else ""))
+        flags.append(
+            f"--data-pvc {args.data_pvc}" + (f" --data-path {args.data_path}" if args.data_path != "/data" else "")
+        )
     if args.kubectl != "kubectl":
         flags.append(f"--kubectl '{args.kubectl}'")
     return " ".join(flags)
@@ -428,8 +469,14 @@ def cmd_rayjob_status(args: argparse.Namespace) -> int:
         print(json.dumps(st.to_dict(), indent=2))
     else:
         print(f"{st.name}: {st.job_status or 'no status yet'} (deployment {st.deployment_status or '-'})")
-        for label, value in (("run_id", st.run_id), ("experiment_id", st.experiment_id), ("message", st.message),
-                             ("dashboard", st.dashboard_url), ("started", st.start_time), ("ended", st.end_time)):
+        for label, value in (
+            ("run_id", st.run_id),
+            ("experiment_id", st.experiment_id),
+            ("message", st.message),
+            ("dashboard", st.dashboard_url),
+            ("started", st.start_time),
+            ("ended", st.end_time),
+        ):
             if value:
                 print(f"  {label:<14} {value}")
     return 1 if st.finished and not st.succeeded else 0
@@ -437,8 +484,13 @@ def cmd_rayjob_status(args: argparse.Namespace) -> int:
 
 def cmd_rayjob_logs(args: argparse.Namespace) -> int:
     try:
-        return follow_rayjob_logs(args.name, namespace=args.namespace, follow=args.follow,
-                                  kubectl=shlex.split(args.kubectl), run=subprocess.run)
+        return follow_rayjob_logs(
+            args.name,
+            namespace=args.namespace,
+            follow=args.follow,
+            kubectl=shlex.split(args.kubectl),
+            run=subprocess.run,
+        )
     except OSError as e:
         raise CliError(str(e)) from e
 
@@ -455,8 +507,14 @@ def cmd_reproduce(args: argparse.Namespace) -> int:
 
     try:
         report = reproduce_run(
-            store, args.run_id, data=data, tracker=tracker, scratch=InMemoryArtifactStore(),
-            device=args.device, atol=args.atol, probe=_probe(),
+            store,
+            args.run_id,
+            data=data,
+            tracker=tracker,
+            scratch=InMemoryArtifactStore(),
+            device=args.device,
+            atol=args.atol,
+            probe=_probe(),
         )
     except (ReproduceError, ArtifactError, TrackerError, DataError, RegistryError, RunnerError) as e:
         raise CliError(str(e)) from e
@@ -485,8 +543,16 @@ def cmd_predict(args: argparse.Namespace) -> int:
     data = _data_provider(spec, args.data_root)
     try:
         record = predict_run(
-            store, args.run_id, data=data, part=args.part, weights=args.weights, device=args.device,
-            probe=_probe(), save_predictions=args.save_predictions, mc_samples=args.mc_samples, mc_seed=args.mc_seed,
+            store,
+            args.run_id,
+            data=data,
+            part=args.part,
+            weights=args.weights,
+            device=args.device,
+            probe=_probe(),
+            save_predictions=args.save_predictions,
+            mc_samples=args.mc_samples,
+            mc_seed=args.mc_seed,
         )
     except (PredictError, ArtifactError, DataError, RegistryError, RunnerError) as e:
         raise CliError(str(e)) from e
@@ -510,8 +576,15 @@ def cmd_ensemble(args: argparse.Namespace) -> int:
     data = _data_provider(spec, args.data_root)
     try:
         record = ensemble_runs(
-            store, args.run_ids, vote=args.vote, data=data, part=args.part, weights=args.weights,
-            device=args.device, probe=_probe(), save_predictions=args.save_predictions,
+            store,
+            args.run_ids,
+            vote=args.vote,
+            data=data,
+            part=args.part,
+            weights=args.weights,
+            device=args.device,
+            probe=_probe(),
+            save_predictions=args.save_predictions,
         )
     except (PredictError, ArtifactError, DataError, RegistryError, RunnerError) as e:
         raise CliError(str(e)) from e
@@ -566,8 +639,9 @@ def _print_diff(d: RunDiff) -> None:
 def cmd_list(args: argparse.Namespace) -> int:
     if not Path(args.artifacts).is_dir():
         raise CliError(f"no such directory: {args.artifacts}")
-    groups = group_by_experiment(list_runs(LocalArtifactStore(args.artifacts), experiment=args.experiment),
-                                 atol=args.atol)
+    groups = group_by_experiment(
+        list_runs(LocalArtifactStore(args.artifacts), experiment=args.experiment), atol=args.atol
+    )
     if args.json:
         print(json.dumps([g.to_dict() for g in groups], indent=2))
     elif not groups:
@@ -618,8 +692,14 @@ def cmd_ui(args: argparse.Namespace) -> int:
     except ImportError as e:
         raise CliError("mlops ui needs the 'tui' extra: uv pip install -e '.[tui]'") from e
     store = LocalArtifactStore(root)
-    MlopsApp(store, label=str(root), refresh=args.refresh, experiment=args.experiment,
-             actions=_ui_actions(args, store), atol=args.atol).run()
+    MlopsApp(
+        store,
+        label=str(root),
+        refresh=args.refresh,
+        experiment=args.experiment,
+        actions=_ui_actions(args, store),
+        atol=args.atol,
+    ).run()
     return 0
 
 
@@ -633,20 +713,33 @@ def _ui_actions(args: argparse.Namespace, store: LocalArtifactStore) -> UiAction
             raise CliError(str(e)) from e
         _discover(args.experiments)
         return reproduce_run(
-            store, run_id, data=_data_provider(spec, args.data_root),
-            tracker=_tracker(spec, args.tracker, args.mlflow_uri), scratch=InMemoryArtifactStore(),
-            device=args.device, atol=args.atol, probe=_probe(),
+            store,
+            run_id,
+            data=_data_provider(spec, args.data_root),
+            tracker=_tracker(spec, args.tracker, args.mlflow_uri),
+            scratch=InMemoryArtifactStore(),
+            device=args.device,
+            atol=args.atol,
+            probe=_probe(),
         )
 
     def resume(run_id: str) -> RunResult:
-        spec, launcher, attempt, _ = _resume_target(store, run_id, ray_address=args.ray_address,
-                                                    experiments=args.experiments)
+        spec, launcher, attempt, _ = _resume_target(
+            store, run_id, ray_address=args.ray_address, experiments=args.experiments
+        )
         _discover(args.experiments)
         tracker = LiveProgress(_tracker(spec, args.tracker, args.mlflow_uri), store)
         try:
-            return launcher.launch(spec, data=_data_provider(spec, args.data_root), tracker=tracker,
-                                   artifacts=store, attempt=attempt, device=args.device, probe=_probe(),
-                                   resume=True)
+            return launcher.launch(
+                spec,
+                data=_data_provider(spec, args.data_root),
+                tracker=tracker,
+                artifacts=store,
+                attempt=attempt,
+                device=args.device,
+                probe=_probe(),
+                resume=True,
+            )
         finally:  # FINISHED or FAILED: the bundle's report.md follows it, as after `mlops resume`
             store.delete(run_id, PROGRESS)
             try:
@@ -687,14 +780,21 @@ def cmd_snapshot(args: argparse.Namespace) -> int:
 
 
 def _add_data_root(p: argparse.ArgumentParser) -> None:
-    p.add_argument("--data-root", metavar="DIR", default=os.environ.get("MLOPS_DATA_ROOT"),
-                   help="where dataset files live on this machine, e.g. DIR/Task09_Spleen (default: $MLOPS_DATA_ROOT)")
+    p.add_argument(
+        "--data-root",
+        metavar="DIR",
+        default=os.environ.get("MLOPS_DATA_ROOT"),
+        help="where dataset files live on this machine, e.g. DIR/Task09_Spleen (default: $MLOPS_DATA_ROOT)",
+    )
 
 
 def _add_keep_checkpoint(p: argparse.ArgumentParser) -> None:
-    p.add_argument("--keep-checkpoint", action="store_true",
-                   help="keep checkpoint.pt (and Ray's checkpoint storage) after the run FINISHED; "
-                        "by default they are deleted, model.pt holds the final weights")
+    p.add_argument(
+        "--keep-checkpoint",
+        action="store_true",
+        help="keep checkpoint.pt (and Ray's checkpoint storage) after the run FINISHED; "
+        "by default they are deleted, model.pt holds the final weights",
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -711,21 +811,37 @@ def build_parser() -> argparse.ArgumentParser:
     _add_data_root(run)
     run.add_argument("--tracker", choices=["mlflow", "inmemory"], help="override tracking.backend")
     run.add_argument("--mlflow-uri", metavar="URI", help="override tracking.uri (e.g. sqlite:///mlflow.db)")
-    run.add_argument("--launcher", choices=["local", "ray"], default="local",
-                     help="local: this process (workers must be 1); ray: Ray Train, one process per worker")
-    run.add_argument("--ray-address", metavar="ADDR", help="Ray cluster address (default: RAY_ADDRESS or a local cluster)")
+    run.add_argument(
+        "--launcher",
+        choices=["local", "ray"],
+        default="local",
+        help="local: this process (workers must be 1); ray: Ray Train, one process per worker",
+    )
+    run.add_argument(
+        "--ray-address", metavar="ADDR", help="Ray cluster address (default: RAY_ADDRESS or a local cluster)"
+    )
     run.add_argument("--ray-storage", metavar="DIR", help="Ray Train storage_path for run state/checkpoints")
     run.add_argument("--device", help="torch device override, e.g. cpu")
     run.add_argument("--attempt", type=int, default=1, help="retry counter; part of RunID")
-    run.add_argument("--checkpoint-every", type=int, metavar="N",
-                     help="store the training state as checkpoint.pt every N epochs (needs --artifacts); "
-                          "makes the run resumable with `mlops resume`")
+    run.add_argument(
+        "--checkpoint-every",
+        type=int,
+        metavar="N",
+        help="store the training state as checkpoint.pt every N epochs (needs --artifacts); "
+        "makes the run resumable with `mlops resume`",
+    )
     _add_keep_checkpoint(run)
-    run.add_argument("--keep-best", metavar="METRIC:min|max",
-                     help="also keep the best epoch's weights as best.pt, e.g. val/dice/mean:max "
-                          "(not in any id; a resume continues with the same criterion)")
-    run.add_argument("--strict-env", action="store_true",
-                     help="refuse to run unless the code and image verifiably match code.commit / image_digest")
+    run.add_argument(
+        "--keep-best",
+        metavar="METRIC:min|max",
+        help="also keep the best epoch's weights as best.pt, e.g. val/dice/mean:max "
+        "(not in any id; a resume continues with the same criterion)",
+    )
+    run.add_argument(
+        "--strict-env",
+        action="store_true",
+        help="refuse to run unless the code and image verifiably match code.commit / image_digest",
+    )
     run.add_argument("--experiments", default="experiments", help="package to discover components from")
     run.add_argument("--json", action="store_true", help="machine-readable summary on stdout")
     run.set_defaults(func=cmd_run)
@@ -737,10 +853,17 @@ def build_parser() -> argparse.ArgumentParser:
     rs.add_argument("--tracker", choices=["mlflow", "inmemory"], help="override tracking.backend")
     rs.add_argument("--mlflow-uri", metavar="URI", help="override tracking.uri")
     rs.add_argument("--device", help="torch device override, e.g. cpu")
-    rs.add_argument("--ray-address", metavar="ADDR",
-                    help="Ray cluster for a run launched on Ray (storage path comes from its launch.json)")
-    rs.add_argument("--checkpoint-every", type=int, metavar="N",
-                    help="checkpoint interval from here on (default: the one the run was started with)")
+    rs.add_argument(
+        "--ray-address",
+        metavar="ADDR",
+        help="Ray cluster for a run launched on Ray (storage path comes from its launch.json)",
+    )
+    rs.add_argument(
+        "--checkpoint-every",
+        type=int,
+        metavar="N",
+        help="checkpoint interval from here on (default: the one the run was started with)",
+    )
     _add_keep_checkpoint(rs)
     rs.add_argument("--experiments", default="experiments", help="package to discover components from")
     rs.add_argument("--json", action="store_true", help="machine-readable summary on stdout")
@@ -752,27 +875,42 @@ def build_parser() -> argparse.ArgumentParser:
     rj.add_argument("--attempt", type=int, default=1, help="retry counter; part of RunID and the job name")
     rj.add_argument("--artifacts-pvc", metavar="PVC", help="PersistentVolumeClaim to mount for the run bundle")
     rj.add_argument("--artifacts-path", default="/artifacts", help="mount path of that PVC inside the pods")
-    rj.add_argument("--data-pvc", metavar="PVC",
-                    help="PersistentVolumeClaim holding the dataset files (e.g. Task09_Spleen/), mounted read-only")
+    rj.add_argument(
+        "--data-pvc",
+        metavar="PVC",
+        help="PersistentVolumeClaim holding the dataset files (e.g. Task09_Spleen/), mounted read-only",
+    )
     rj.add_argument("--data-path", default="/data", help="mount path of that PVC; passed as --data-root")
     rj.add_argument("--mlflow-uri", metavar="URI", help="override tracking.uri for the in-cluster run")
-    rj.add_argument("--checkpoint-every", type=int, metavar="N",
-                    help="checkpoint every N epochs so the job can be resumed with --resume "
-                         "(needs --artifacts-pvc and --ray-storage-pvc)")
-    rj.add_argument("--ray-storage-pvc", metavar="PVC",
-                    help="PersistentVolumeClaim for Ray Train's checkpoints, writable on every pod "
-                         "(ReadWriteMany across nodes); passed as --ray-storage")
+    rj.add_argument(
+        "--checkpoint-every",
+        type=int,
+        metavar="N",
+        help="checkpoint every N epochs so the job can be resumed with --resume "
+        "(needs --artifacts-pvc and --ray-storage-pvc)",
+    )
+    rj.add_argument(
+        "--ray-storage-pvc",
+        metavar="PVC",
+        help="PersistentVolumeClaim for Ray Train's checkpoints, writable on every pod "
+        "(ReadWriteMany across nodes); passed as --ray-storage",
+    )
     rj.add_argument("--ray-storage-path", default="/ray-storage", help="mount path of that PVC inside the pods")
     rj.add_argument("--keep-best", metavar="METRIC:min|max", help="passed to the in-cluster `mlops run`")
-    rj.add_argument("--resume", action="store_true",
-                    help="render a RayJob (<name>-resume-<generated>) that runs `mlops resume` for this spec + --attempt "
-                         "from the checkpoints on the PVCs; pass the same PVCs and paths as the first job")
+    rj.add_argument(
+        "--resume",
+        action="store_true",
+        help="render a RayJob (<name>-resume-<generated>) that runs `mlops resume` for this spec + --attempt "
+        "from the checkpoints on the PVCs; pass the same PVCs and paths as the first job",
+    )
     rj.add_argument("--submit", action="store_true", help="kubectl apply the manifest instead of printing it")
     rj.add_argument("--kubectl", default="kubectl", help='kubectl command, e.g. "kubectl --context prod"')
     rj.set_defaults(func=cmd_rayjob)
 
-    rs_ = sub.add_parser("rayjob-status", help="state of a submitted RayJob (kubectl get); "
-                                              "exit 0 succeeded or still going, 1 failed/stopped")
+    rs_ = sub.add_parser(
+        "rayjob-status",
+        help="state of a submitted RayJob (kubectl get); exit 0 succeeded or still going, 1 failed/stopped",
+    )
     rs_.add_argument("name", help="RayJob name, as printed by `mlops rayjob --submit`")
     rs_.add_argument("--namespace", default="default")
     rs_.add_argument("--kubectl", default="kubectl", help='kubectl command, e.g. "kubectl --context prod"')
@@ -793,25 +931,42 @@ def build_parser() -> argparse.ArgumentParser:
     rp.add_argument("--tracker", choices=["mlflow", "inmemory"], help="where the replay is recorded")
     rp.add_argument("--mlflow-uri", metavar="URI", help="override tracking.uri")
     rp.add_argument("--device", help="torch device override, e.g. cpu")
-    rp.add_argument("--atol", type=float, default=0.0,
-                    help="weight tolerance; 0 (default) = bit-exact, >0 = allclose for cross-launcher checks")
+    rp.add_argument(
+        "--atol",
+        type=float,
+        default=0.0,
+        help="weight tolerance; 0 (default) = bit-exact, >0 = allclose for cross-launcher checks",
+    )
     rp.add_argument("--experiments", default="experiments", help="package to discover components from")
     rp.add_argument("--json", action="store_true", help="machine-readable report on stdout")
     rp.set_defaults(func=cmd_reproduce)
 
-    pr = sub.add_parser("predict", help="apply a finished run's model to its test (or val) cases and store "
-                                        "the result next to the runs")
+    pr = sub.add_parser(
+        "predict", help="apply a finished run's model to its test (or val) cases and store the result next to the runs"
+    )
     pr.add_argument("run_id", help="FINISHED run whose model predicts; its bundle must be under --artifacts")
     pr.add_argument("--artifacts", metavar="DIR", required=True, help="artifact root holding DIR/<run_id>/")
-    pr.add_argument("--part", choices=["test", "val"], default="test",
-                    help="which cases (default test; val was seen during training, so its numbers are optimistic)")
-    pr.add_argument("--weights", choices=["best.pt", "model.pt"],
-                    help="default: best.pt when the run kept one, else model.pt")
-    pr.add_argument("--save-predictions", action="store_true",
-                    help="also store each case's predicted labels (and uncertainty maps with --mc-samples)")
-    pr.add_argument("--mc-samples", type=int, metavar="N",
-                    help="MC dropout: N forward passes per case with dropout on; adds uncertainty/entropy and "
-                         "uncertainty/variance (the model must have dropout)")
+    pr.add_argument(
+        "--part",
+        choices=["test", "val"],
+        default="test",
+        help="which cases (default test; val was seen during training, so its numbers are optimistic)",
+    )
+    pr.add_argument(
+        "--weights", choices=["best.pt", "model.pt"], help="default: best.pt when the run kept one, else model.pt"
+    )
+    pr.add_argument(
+        "--save-predictions",
+        action="store_true",
+        help="also store each case's predicted labels (and uncertainty maps with --mc-samples)",
+    )
+    pr.add_argument(
+        "--mc-samples",
+        type=int,
+        metavar="N",
+        help="MC dropout: N forward passes per case with dropout on; adds uncertainty/entropy and "
+        "uncertainty/variance (the model must have dropout)",
+    )
     pr.add_argument("--mc-seed", type=int, default=0, help="MC dropout seed; case i uses seed + i (default 0)")
     _add_data_root(pr)
     pr.add_argument("--device", help="torch device override, e.g. cpu")
@@ -819,16 +974,28 @@ def build_parser() -> argparse.ArgumentParser:
     pr.add_argument("--json", action="store_true", help="the result record on stdout")
     pr.set_defaults(func=cmd_predict)
 
-    en = sub.add_parser("ensemble", help="merge several runs' predictions on the same test (or val) cases "
-                                         "by soft or hard voting")
+    en = sub.add_parser(
+        "ensemble", help="merge several runs' predictions on the same test (or val) cases by soft or hard voting"
+    )
     en.add_argument("run_ids", nargs="+", metavar="run_id", help="FINISHED runs (at least two), under --artifacts")
     en.add_argument("--artifacts", metavar="DIR", required=True, help="artifact root holding the runs")
-    en.add_argument("--vote", choices=["soft", "hard"], required=True,
-                    help="soft: average the probabilities; hard: majority of each run's labels")
-    en.add_argument("--part", choices=["test", "val"], default="test",
-                    help="which cases (default test; k-fold runs share only the test cases)")
-    en.add_argument("--weights", choices=["best.pt", "model.pt"],
-                    help="for every run; default: best.pt when a run kept one, else model.pt")
+    en.add_argument(
+        "--vote",
+        choices=["soft", "hard"],
+        required=True,
+        help="soft: average the probabilities; hard: majority of each run's labels",
+    )
+    en.add_argument(
+        "--part",
+        choices=["test", "val"],
+        default="test",
+        help="which cases (default test; k-fold runs share only the test cases)",
+    )
+    en.add_argument(
+        "--weights",
+        choices=["best.pt", "model.pt"],
+        help="for every run; default: best.pt when a run kept one, else model.pt",
+    )
     en.add_argument("--save-predictions", action="store_true", help="also store each case's merged labels")
     _add_data_root(en)
     en.add_argument("--device", help="torch device override, e.g. cpu")
@@ -847,28 +1014,45 @@ def build_parser() -> argparse.ArgumentParser:
     rr.add_argument("--out", metavar="FILE", help="write the report to FILE instead of stdout")
     rr.set_defaults(func=cmd_report)
 
-    df = sub.add_parser("diff", help="explain why two runs differ (fingerprint, resources, labels, env, metrics); "
-                                     "exit 0 same experiment, 1 different")
+    df = sub.add_parser(
+        "diff",
+        help="explain why two runs differ (fingerprint, resources, labels, env, metrics); "
+        "exit 0 same experiment, 1 different",
+    )
     df.add_argument("run_a")
     df.add_argument("run_b")
     df.add_argument("--artifacts", metavar="DIR", required=True, help="artifact root holding run_a (and run_b)")
     df.add_argument("--artifacts-b", metavar="DIR", help="artifact root holding run_b, if it is elsewhere")
-    df.add_argument("--atol", type=float, default=0.0, metavar="X",
-                    help="history values within X count as equal (default 0: exact; >0 for runs "
-                         "from different launchers)")
+    df.add_argument(
+        "--atol",
+        type=float,
+        default=0.0,
+        metavar="X",
+        help="history values within X count as equal (default 0: exact; >0 for runs from different launchers)",
+    )
     df.add_argument("--json", action="store_true", help="machine-readable diff on stdout")
     df.set_defaults(func=cmd_diff)
 
-    ls = sub.add_parser("list", help="runs under an artifact root, grouped by experiment, and whether "
-                                     "each experiment's finished attempts agree")
+    ls = sub.add_parser(
+        "list",
+        help="runs under an artifact root, grouped by experiment, and whether "
+        "each experiment's finished attempts agree",
+    )
     ls.add_argument("--artifacts", metavar="DIR", required=True, help="artifact root to scan")
     ls.add_argument("--experiment", metavar="ID", help="only this ExperimentID (a prefix is enough)")
-    ls.add_argument("--atol", type=float, default=0.0, metavar="X",
-                    help="final metrics within X of each other count as agreeing (default 0: exact)")
+    ls.add_argument(
+        "--atol",
+        type=float,
+        default=0.0,
+        metavar="X",
+        help="final metrics within X of each other count as agreeing (default 0: exact)",
+    )
     ls.add_argument("--json", action="store_true", help="machine-readable listing on stdout")
     ls.set_defaults(func=cmd_list)
 
-    sn = sub.add_parser("snapshot", help="print the content hash of the data a spec would load, to pin as dataset.snapshot")
+    sn = sub.add_parser(
+        "snapshot", help="print the content hash of the data a spec would load, to pin as dataset.snapshot"
+    )
     sn.add_argument("experiment", help="path to experiment.yaml")
     _add_data_root(sn)
     sn.add_argument("--experiments", default="experiments", help="package to discover components from")
@@ -877,15 +1061,15 @@ def build_parser() -> argparse.ArgumentParser:
     ui = sub.add_parser("ui", help="terminal browser over an artifact root (needs the 'tui' extra)")
     ui.add_argument("--artifacts", metavar="DIR", required=True, help="artifact root to browse")
     ui.add_argument("--experiment", metavar="ID", help="only this ExperimentID (a prefix is enough)")
-    ui.add_argument("--refresh", type=float, default=2.0, metavar="SECONDS",
-                    help="re-read the artifact root this often (default 2)")
+    ui.add_argument(
+        "--refresh", type=float, default=2.0, metavar="SECONDS", help="re-read the artifact root this often (default 2)"
+    )
     _add_data_root(ui)
     ui.add_argument("--tracker", choices=["mlflow", "inmemory"], help="for reproduce/resume: override tracking.backend")
     ui.add_argument("--mlflow-uri", metavar="URI", help="for reproduce/resume: override tracking.uri")
     ui.add_argument("--device", help="for reproduce/resume: torch device override, e.g. cpu")
     ui.add_argument("--ray-address", metavar="ADDR", help="for resuming a Ray run")
-    ui.add_argument("--atol", type=float, default=0.0, metavar="X",
-                    help="diff/reproduce tolerance (default 0: exact)")
+    ui.add_argument("--atol", type=float, default=0.0, metavar="X", help="diff/reproduce tolerance (default 0: exact)")
     ui.add_argument("--experiments", default="experiments", help="package to discover components from")
     ui.add_argument("--namespace", default="default", help="RayJobs screen (j): namespace to list")
     ui.add_argument("--kubectl", default="kubectl", help='RayJobs screen: kubectl command, e.g. "kubectl --context X"')

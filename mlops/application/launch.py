@@ -40,11 +40,30 @@ class LocalLauncher:
     """world_size 1, this process."""
 
     def launch(
-        self, spec, *, data, tracker, artifacts=None, attempt=1, device=None, probe=None,
-        checkpoint_every=None, resume=False, keep_checkpoint=False, keep_best=None,
+        self,
+        spec,
+        *,
+        data,
+        tracker,
+        artifacts=None,
+        attempt=1,
+        device=None,
+        probe=None,
+        checkpoint_every=None,
+        resume=False,
+        keep_checkpoint=False,
+        keep_best=None,
     ) -> RunResult:
         return run_experiment(
-            spec, data=data, tracker=tracker, artifacts=artifacts, attempt=attempt, device=device, probe=probe,
-            checkpoint_every=checkpoint_every, resume=resume, keep_checkpoint=keep_checkpoint,
+            spec,
+            data=data,
+            tracker=tracker,
+            artifacts=artifacts,
+            attempt=attempt,
+            device=device,
+            probe=probe,
+            checkpoint_every=checkpoint_every,
+            resume=resume,
+            keep_checkpoint=keep_checkpoint,
             keep_best=keep_best,
         )

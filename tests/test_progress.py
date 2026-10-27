@@ -52,8 +52,15 @@ class Clock:
 
 
 def _progress(**kw) -> Progress:
-    base = dict(run_id="r" * 64, state="running", epoch=2, epochs=5, started=900.0, updated=1000.0,
-                history=[{"val/loss": 0.5}, {"val/loss": 0.4}])
+    base = dict(
+        run_id="r" * 64,
+        state="running",
+        epoch=2,
+        epochs=5,
+        started=900.0,
+        updated=1000.0,
+        history=[{"val/loss": 0.5}, {"val/loss": 0.4}],
+    )
     return Progress(**{**base, **kw})
 
 
@@ -180,8 +187,22 @@ def test_resume_refuses_a_running_run(tmp_path, capsys, spec):
     data = yaml.safe_load(SMOKE.read_text())
     data["training"]["epochs"] = 2
     (tmp_path / "two.yaml").write_text(yaml.safe_dump(data))
-    assert main(["run", str(tmp_path / "two.yaml"), "--tracker", "inmemory", "--artifacts", str(art),
-                 "--checkpoint-every", "1", "--keep-checkpoint"]) == 0
+    assert (
+        main(
+            [
+                "run",
+                str(tmp_path / "two.yaml"),
+                "--tracker",
+                "inmemory",
+                "--artifacts",
+                str(art),
+                "--checkpoint-every",
+                "1",
+                "--keep-checkpoint",
+            ]
+        )
+        == 0
+    )
     (run_dir,) = art.iterdir()
     (run_dir / MANIFEST).unlink()
     import time

@@ -29,6 +29,7 @@ from mlops.cli import main
 from mlops.config import load_experiment_yaml
 from mlops.domain import compute_experiment_id, compute_run_id
 from mlops.domain.environment import check_snapshot
+from mlops.ports.artifacts import ArtifactError
 from mlops.ports.data import DataError
 from mlops.registry import discover
 
@@ -93,7 +94,7 @@ def test_mismatched_data_never_starts_the_run(spec):
         run_experiment(_with_snapshot(spec, A), data=HashedBlobs(B), tracker=tracker, artifacts=store)
     assert tracker.runs == []
     run_id = compute_run_id(compute_experiment_id(_with_snapshot(spec, A)), spec.resources, 1)
-    with pytest.raises(Exception):
+    with pytest.raises(ArtifactError):
         store.list(run_id)
 
 
@@ -202,8 +203,9 @@ def test_cli_snapshot_for_unhashed_data_exits_2(capsys):
 def test_cli_run_with_pinned_spleen_snapshot_verifies(spleen_root, tmp_path, capsys):
     path = _spleen_yaml(tmp_path, _spleen_snapshot(spleen_root))
     art = tmp_path / "art"
-    rc = main(["run", str(path), "--tracker", "inmemory", "--data-root", str(spleen_root),
-               "--artifacts", str(art), "--json"])
+    rc = main(
+        ["run", str(path), "--tracker", "inmemory", "--data-root", str(spleen_root), "--artifacts", str(art), "--json"]
+    )
     assert rc == 0
     run_id = json.loads(capsys.readouterr().out)["run_id"]
     assert json.loads((art / run_id / "manifest.json").read_text())["data_snapshot"]["status"] == "ok"

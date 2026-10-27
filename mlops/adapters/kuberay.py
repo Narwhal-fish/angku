@@ -78,8 +78,9 @@ def render_rayjob(
     pod, so ReadWriteMany when pods span nodes) and ``spec.json`` + ``launch.json`` to
     ``artifacts_pvc``; both are required. ``resume=True`` renders a RayJob with
     ``generateName: <name>-resume-`` (Kubernetes adds a suffix, so earlier finished jobs of the run
-    never have to be deleted; submit with ``kubectl create``) whose entrypoint is ``mlops resume RUN_ID``: spec, attempt, interval and storage path come
-    from those PVCs (so mount them at the same paths as the first job), no ConfigMap needed.
+    never have to be deleted; submit with ``kubectl create``) whose entrypoint is
+    ``mlops resume RUN_ID``: spec, attempt, interval and storage path come from those PVCs (so
+    mount them at the same paths as the first job), no ConfigMap needed.
     """
     if not spec.is_pinned():
         raise UnpinnedInputError(spec.unpinned_inputs())
@@ -104,10 +105,15 @@ def render_rayjob(
         entrypoint = ["mlops", "resume", run_id, "--artifacts", artifacts_path]
     else:
         entrypoint = [
-            "mlops", "run", f"{SPEC_MOUNT}/{SPEC_FILE}",
-            "--launcher", "ray",
-            "--attempt", str(attempt),
-            "--artifacts", artifacts_path,
+            "mlops",
+            "run",
+            f"{SPEC_MOUNT}/{SPEC_FILE}",
+            "--launcher",
+            "ray",
+            "--attempt",
+            str(attempt),
+            "--artifacts",
+            artifacts_path,
         ]
         if ray_storage_pvc:
             entrypoint += ["--ray-storage", ray_storage_path]
@@ -340,7 +346,11 @@ def active_rayjobs(
 
 
 def rayjob_logs(
-    name: str, *, namespace: str = "default", tail: int = 200, kubectl: Sequence[str] = ("kubectl",),
+    name: str,
+    *,
+    namespace: str = "default",
+    tail: int = 200,
+    kubectl: Sequence[str] = ("kubectl",),
     run: Runner = subprocess.run,
 ) -> str:
     """The last ``tail`` lines of the driver log, captured (``follow_rayjob_logs`` streams instead)."""

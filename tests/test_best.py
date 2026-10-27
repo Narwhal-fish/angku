@@ -34,10 +34,13 @@ def _load_experiments():
 # --- the criterion and picking the epoch: pure domain ---
 
 
-@pytest.mark.parametrize("text,metric,mode", [
-    ("val/loss:min", "val/loss", "min"),
-    ("val/dice/mean:max", "val/dice/mean", "max"),
-])
+@pytest.mark.parametrize(
+    "text,metric,mode",
+    [
+        ("val/loss:min", "val/loss", "min"),
+        ("val/dice/mean:max", "val/dice/mean", "max"),
+    ],
+)
 def test_parse(text, metric, mode):
     c = BestCriterion.parse(text)
     assert (c.metric, c.mode) == (metric, mode)
@@ -95,8 +98,13 @@ def test_best_pt_holds_the_weights_of_the_best_epoch(spec, mode):
 def test_keep_best_does_not_change_the_run(spec):
     plain_store, best_store = InMemoryArtifactStore(), InMemoryArtifactStore()
     plain = run_experiment(spec, data=_data(), tracker=InMemoryTracker(), artifacts=plain_store)
-    best = run_experiment(spec, data=_data(), tracker=InMemoryTracker(), artifacts=best_store,
-                          keep_best=BestCriterion(metric="val/loss", mode="min"))
+    best = run_experiment(
+        spec,
+        data=_data(),
+        tracker=InMemoryTracker(),
+        artifacts=best_store,
+        keep_best=BestCriterion(metric="val/loss", mode="min"),
+    )
     assert plain.run_id == best.run_id and plain.history == best.history
     a, b = _load(plain_store, plain.run_id, MODEL), _load(best_store, best.run_id, MODEL)
     assert all(torch.equal(v, b[k]) for k, v in a.items())
@@ -112,8 +120,9 @@ def test_no_keep_best_no_best_pt(spec):
 def test_unknown_metric_fails_after_the_first_epoch_naming_the_known_ones(spec):
     store, tracker = InMemoryArtifactStore(), InMemoryTracker()
     with pytest.raises(RunnerError, match=r"val/dice.*val/loss"):
-        run_experiment(spec, data=_data(), tracker=tracker, artifacts=store,
-                       keep_best=BestCriterion(metric="val/dice", mode="max"))
+        run_experiment(
+            spec, data=_data(), tracker=tracker, artifacts=store, keep_best=BestCriterion(metric="val/dice", mode="max")
+        )
     assert tracker.runs[0].status == "FAILED" and len(tracker.runs[0].metrics) == 1
 
 
@@ -137,8 +146,14 @@ def test_resume_with_another_criterion_is_refused(spec):
     store = InMemoryArtifactStore()
     _interrupt(spec, store, keep_best=BestCriterion(metric="val/loss", mode="min"))
     with pytest.raises(RunnerError, match="val/loss:min"):
-        run_experiment(spec, data=_data(), tracker=InMemoryTracker(), artifacts=store, resume=True,
-                       keep_best=BestCriterion(metric="val/loss", mode="max"))
+        run_experiment(
+            spec,
+            data=_data(),
+            tracker=InMemoryTracker(),
+            artifacts=store,
+            resume=True,
+            keep_best=BestCriterion(metric="val/loss", mode="max"),
+        )
 
 
 def test_failed_run_writes_no_best_pt(spec):
@@ -150,8 +165,13 @@ def test_failed_run_writes_no_best_pt(spec):
 
 def test_report_names_the_best_epoch(spec):
     store = InMemoryArtifactStore()
-    result = run_experiment(spec, data=_data(), tracker=InMemoryTracker(), artifacts=store,
-                            keep_best=BestCriterion(metric="val/loss", mode="min"))
+    result = run_experiment(
+        spec,
+        data=_data(),
+        tracker=InMemoryTracker(),
+        artifacts=store,
+        keep_best=BestCriterion(metric="val/loss", mode="min"),
+    )
     best = load_bundle(store, result.run_id).manifest.best
     md = render_report(load_bundle(store, result.run_id))
     assert f"| best | `val/loss` (min) = {best.value:.6g} at epoch {best.epoch}, `best.pt` |" in md
@@ -161,8 +181,13 @@ def test_report_names_the_best_epoch(spec):
 
 
 def _best_run(spec, store):
-    return run_experiment(spec, data=_data(), tracker=InMemoryTracker(), artifacts=store,
-                          keep_best=BestCriterion(metric="val/loss", mode="max")).run_id
+    return run_experiment(
+        spec,
+        data=_data(),
+        tracker=InMemoryTracker(),
+        artifacts=store,
+        keep_best=BestCriterion(metric="val/loss", mode="max"),
+    ).run_id
 
 
 def test_reproduce_checks_best_pt(spec):
@@ -192,8 +217,12 @@ def test_cli_keep_best(tmp_path, capsys):
 
     art = tmp_path / "artifacts"
     yml = _write_yaml(tmp_path / "e.yaml", **{"training.epochs": 2})
-    assert main(["run", str(yml), "--tracker", "inmemory", "--artifacts", str(art),
-                 "--keep-best", "val/loss:min", "--json"]) == 0
+    assert (
+        main(
+            ["run", str(yml), "--tracker", "inmemory", "--artifacts", str(art), "--keep-best", "val/loss:min", "--json"]
+        )
+        == 0
+    )
     run_id = json.loads(capsys.readouterr().out)["run_id"]
     assert (art / run_id / BEST).is_file()
     assert "| best | `val/loss` (min)" in (art / run_id / "report.md").read_text()

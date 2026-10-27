@@ -46,9 +46,7 @@ class Code(_Strict):
         if v is None:
             return v
         if not GIT_SHA_RE.match(v):
-            raise ValueError(
-                f"code.commit must be a full 40-hex git commit SHA (not a branch/tag), got {v!r}"
-            )
+            raise ValueError(f"code.commit must be a full 40-hex git commit SHA (not a branch/tag), got {v!r}")
         return v
 
 
@@ -64,9 +62,7 @@ class Environment(_Strict):
         if v is None:
             return v
         if not IMAGE_DIGEST_RE.match(v):
-            raise ValueError(
-                f"environment.image_digest must look like 'sha256:<64 hex>', got {v!r}"
-            )
+            raise ValueError(f"environment.image_digest must look like 'sha256:<64 hex>', got {v!r}")
         return v
 
 
@@ -83,9 +79,7 @@ class Dataset(_Strict):
         if v is None:
             return v
         if v.strip().lower() in _UNPINNED_WORDS:
-            raise ValueError(
-                f"dataset.snapshot must be an immutable snapshot id, got {v!r}"
-            )
+            raise ValueError(f"dataset.snapshot must be an immutable snapshot id, got {v!r}")
         return v
 
 
@@ -166,7 +160,9 @@ class Split(_Strict):
             if k < 2:
                 raise ValueError(f"split.k must be >= 2, got {k}")
             if self.fold is None:
-                raise ValueError(f"split.fold is required for kind: kfold (0..{k - 1}); each fold is its own experiment")
+                raise ValueError(
+                    f"split.fold is required for kind: kfold (0..{k - 1}); each fold is its own experiment"
+                )
             if not 0 <= self.fold < k:
                 raise ValueError(f"split.fold must be in 0..{k - 1}, got {self.fold}")
             object.__setattr__(self, "k", k)

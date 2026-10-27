@@ -32,8 +32,15 @@ def _split(**kw):
 
 def test_defaults_are_resolved_into_the_spec():
     s = _split(kind="holdout")
-    assert s.model_dump() == {"kind": "holdout", "val": 0.2, "test": 0.0, "k": None, "fold": None,
-                              "order": "shuffled", "seed": 0}
+    assert s.model_dump() == {
+        "kind": "holdout",
+        "val": 0.2,
+        "test": 0.0,
+        "k": None,
+        "fold": None,
+        "order": "shuffled",
+        "seed": 0,
+    }
     s = _split(kind="kfold", fold=2)
     assert (s.k, s.fold, s.val, s.test, s.order) == (5, 2, None, 0.0, "shuffled")
 
@@ -42,21 +49,24 @@ def test_kind_defaults_to_holdout():
     assert _split().kind == "holdout"
 
 
-@pytest.mark.parametrize("bad", [
-    {"kind": "holdout", "vall": 0.2},          # typo
-    {"kind": "holdout", "k": 5},               # kfold-only field
-    {"kind": "holdout", "fold": 1},
-    {"kind": "kfold", "val": 0.2, "fold": 0},  # holdout-only field
-    {"kind": "kfold"},                         # fold is required
-    {"kind": "kfold", "k": 5, "fold": 5},      # fold out of range
-    {"kind": "kfold", "k": 1, "fold": 0},
-    {"kind": "holdout", "val": 0.0},
-    {"kind": "holdout", "val": 1.0},
-    {"kind": "holdout", "test": -0.1},
-    {"kind": "holdout", "val": 0.5, "test": 0.5},
-    {"kind": "random"},
-    {"order": "reversed"},
-])
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"kind": "holdout", "vall": 0.2},  # typo
+        {"kind": "holdout", "k": 5},  # kfold-only field
+        {"kind": "holdout", "fold": 1},
+        {"kind": "kfold", "val": 0.2, "fold": 0},  # holdout-only field
+        {"kind": "kfold"},  # fold is required
+        {"kind": "kfold", "k": 5, "fold": 5},  # fold out of range
+        {"kind": "kfold", "k": 1, "fold": 0},
+        {"kind": "holdout", "val": 0.0},
+        {"kind": "holdout", "val": 1.0},
+        {"kind": "holdout", "test": -0.1},
+        {"kind": "holdout", "val": 0.5, "test": 0.5},
+        {"kind": "random"},
+        {"order": "reversed"},
+    ],
+)
 def test_invalid_split_rejected(bad):
     with pytest.raises(ConfigError):
         _split(**bad)
@@ -97,9 +107,9 @@ def test_split_seed_is_separate_from_training_seed(raw):
 
 def test_count_rounds_half_up_and_is_at_least_one_unless_zero():
     assert count_of(0.0, 41) == 0
-    assert count_of(0.15, 41) == 6   # 6.15
-    assert count_of(0.2, 41) == 8    # 8.2
-    assert count_of(0.25, 10) == 3   # 2.5 rounds up (Python's round() would give 2)
+    assert count_of(0.15, 41) == 6  # 6.15
+    assert count_of(0.2, 41) == 8  # 8.2
+    assert count_of(0.25, 10) == 3  # 2.5 rounds up (Python's round() would give 2)
     assert count_of(0.01, 10) == 1
 
 
@@ -159,12 +169,15 @@ def test_kfold_uneven_sizes_differ_by_at_most_one():
     assert sorted(sizes) == [10, 10, 10, 11] and sizes[0] == 11  # the first folds take the remainder
 
 
-@pytest.mark.parametrize("ids, split, words", [
-    ([], {"kind": "holdout"}, "no cases"),
-    (["a", "a", "b"], {"kind": "holdout"}, "duplicate"),
-    (["a", "b"], {"kind": "holdout", "val": 0.5, "test": 0.4}, "no training case"),
-    (["a", "b", "c"], {"kind": "kfold", "k": 5, "fold": 0}, "fewer cases"),
-])
+@pytest.mark.parametrize(
+    "ids, split, words",
+    [
+        ([], {"kind": "holdout"}, "no cases"),
+        (["a", "a", "b"], {"kind": "holdout"}, "duplicate"),
+        (["a", "b"], {"kind": "holdout", "val": 0.5, "test": 0.4}, "no training case"),
+        (["a", "b", "c"], {"kind": "kfold", "k": 5, "fold": 0}, "fewer cases"),
+    ],
+)
 def test_impossible_splits_raise(ids, split, words):
     with pytest.raises(SplitError, match=words):
         assign_split(ids, _split(**split))
@@ -245,20 +258,35 @@ def test_run_records_the_split_and_never_reads_test(raw):
 
 def test_run_without_split_writes_no_split_file(raw):
     store = InMemoryArtifactStore()
-    result = run_experiment(load_experiment_dict(raw), data=SyntheticBlobs(), tracker=InMemoryTracker(), artifacts=store)
+    result = run_experiment(
+        load_experiment_dict(raw), data=SyntheticBlobs(), tracker=InMemoryTracker(), artifacts=store
+    )
     assert SPLIT not in store.list(result.run_id)
     assert load_bundle(store, result.run_id).manifest.split is None
 
 
 def test_split_changes_training_and_reproduces(raw):
     store = InMemoryArtifactStore()
-    a = run_experiment(_spec(raw, kind="holdout", val=0.25), data=SyntheticBlobs(n_train=6, n_val=2),
-                       tracker=InMemoryTracker(), artifacts=store)
-    b = run_experiment(_spec(raw, kind="holdout", val=0.25, seed=7), data=SyntheticBlobs(n_train=6, n_val=2),
-                       tracker=InMemoryTracker(), artifacts=store)
+    a = run_experiment(
+        _spec(raw, kind="holdout", val=0.25),
+        data=SyntheticBlobs(n_train=6, n_val=2),
+        tracker=InMemoryTracker(),
+        artifacts=store,
+    )
+    b = run_experiment(
+        _spec(raw, kind="holdout", val=0.25, seed=7),
+        data=SyntheticBlobs(n_train=6, n_val=2),
+        tracker=InMemoryTracker(),
+        artifacts=store,
+    )
     assert a.split != b.split and a.history != b.history
-    report = reproduce_run(store, a.run_id, data=SyntheticBlobs(n_train=6, n_val=2), tracker=InMemoryTracker(),
-                           scratch=InMemoryArtifactStore())
+    report = reproduce_run(
+        store,
+        a.run_id,
+        data=SyntheticBlobs(n_train=6, n_val=2),
+        tracker=InMemoryTracker(),
+        scratch=InMemoryArtifactStore(),
+    )
     assert report.ok, report.mismatches
 
 
@@ -270,14 +298,19 @@ class _NoCases:
         return SyntheticBlobs().load(dataset, preprocessing)
 
 
-@pytest.mark.parametrize("data, words", [
-    (_NoCases(), "cannot list its cases"),
-    (SyntheticBlobs(n_train=1, n_val=1), "no training case"),
-])
+@pytest.mark.parametrize(
+    "data, words",
+    [
+        (_NoCases(), "cannot list its cases"),
+        (SyntheticBlobs(n_train=1, n_val=1), "no training case"),
+    ],
+)
 def test_split_problems_stop_the_run_before_it_starts(raw, data, words):
     tracker, store = InMemoryTracker(), InMemoryArtifactStore()
     with pytest.raises(DataError, match=words):
-        run_experiment(_spec(raw, kind="holdout", val=0.5, test=0.5 - 1e-9), data=data, tracker=tracker, artifacts=store)
+        run_experiment(
+            _spec(raw, kind="holdout", val=0.5, test=0.5 - 1e-9), data=data, tracker=tracker, artifacts=store
+        )
     assert not tracker.runs and not store.runs()
 
 
@@ -298,8 +331,12 @@ def test_split_rule_and_counts_read_plainly():
 
 def test_report_shows_the_rule_and_the_counts(raw):
     store = InMemoryArtifactStore()
-    r = run_experiment(_spec(raw, val=0.25, test=0.25), data=SyntheticBlobs(n_train=6, n_val=2),
-                       tracker=InMemoryTracker(), artifacts=store)
+    r = run_experiment(
+        _spec(raw, val=0.25, test=0.25),
+        data=SyntheticBlobs(n_train=6, n_val=2),
+        tracker=InMemoryTracker(),
+        artifacts=store,
+    )
     md = render_report(load_bundle(store, r.run_id))
     assert "| split | train 4, val 2, test 2, cases in `split.json` |" in md
     assert "| split | holdout: val 0.25, test 0.25, shuffled (seed 0) |" in md
@@ -341,8 +378,12 @@ def test_ui_overview_shows_the_split_like_the_report(raw):
     from mlops.ui.rows import overview_rows
 
     store = InMemoryArtifactStore()
-    r = run_experiment(_spec(raw, val=0.25, test=0.25), data=SyntheticBlobs(n_train=6, n_val=2),
-                       tracker=InMemoryTracker(), artifacts=store)
+    r = run_experiment(
+        _spec(raw, val=0.25, test=0.25),
+        data=SyntheticBlobs(n_train=6, n_val=2),
+        tracker=InMemoryTracker(),
+        artifacts=store,
+    )
     b = load_bundle(store, r.run_id)
     rows = dict(overview_rows(list_runs(store)[0], spec=b.spec, manifest=b.manifest))
     assert rows["split"] == "train 4, val 2, test 2; holdout: val 0.25, test 0.25, shuffled (seed 0)"

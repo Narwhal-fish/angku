@@ -50,8 +50,15 @@ def build_sliding_window(p: SlidingWindowParams):
                 f"sliding_window: roi_size has {len(p.roi_size)} dims but the input has {x.ndim - 2} spatial dims"
             )
         out = sliding_window_inference(
-            x, roi_size=p.roi_size, sw_batch_size=p.sw_batch_size, predictor=model, overlap=p.overlap,
-            mode=p.mode, sigma_scale=p.sigma_scale, padding_mode=p.padding_mode, cval=p.cval,
+            x,
+            roi_size=p.roi_size,
+            sw_batch_size=p.sw_batch_size,
+            predictor=model,
+            overlap=p.overlap,
+            mode=p.mode,
+            sigma_scale=p.sigma_scale,
+            padding_mode=p.padding_mode,
+            cval=p.cval,
         )
         return out.as_tensor() if hasattr(out, "as_tensor") else out
 

@@ -14,8 +14,8 @@ import yaml
 from mlops.application.bundle import MANIFEST, MODEL, SPEC
 from mlops.application.report import REPORT
 from mlops.cli import main
-from mlops.domain import compute_experiment_id
 from mlops.config import load_experiment_yaml
+from mlops.domain import compute_experiment_id
 
 ROOT = Path(__file__).parent.parent
 SMOKE = ROOT / "experiments/configs/tiny_cnn_smoke.yaml"
@@ -129,7 +129,9 @@ def test_run_attempt_and_device_are_forwarded(tmp_path, capsys):
 
 def test_training_failure_exits_1_and_keeps_failed_bundle(tmp_path, capsys):
     # wrong channel count makes the first conv raise inside the epoch loop
-    path = _write_yaml(tmp_path / "e.yaml", **{"model.params": {"in_channels": 3, "out_channels": 2, "hidden": 4, "spatial_dims": 3}})
+    path = _write_yaml(
+        tmp_path / "e.yaml", **{"model.params": {"in_channels": 3, "out_channels": 2, "hidden": 4, "spatial_dims": 3}}
+    )
     art = tmp_path / "artifacts"
     rc = main(["run", str(path), "--tracker", "inmemory", "--artifacts", str(art)])
     assert rc == 1
@@ -140,9 +142,7 @@ def test_training_failure_exits_1_and_keeps_failed_bundle(tmp_path, capsys):
 
 
 def test_console_entry_point():
-    r = subprocess.run(
-        [sys.executable, "-m", "mlops", "id", str(SMOKE)], capture_output=True, text=True, cwd=ROOT
-    )
+    r = subprocess.run([sys.executable, "-m", "mlops", "id", str(SMOKE)], capture_output=True, text=True, cwd=ROOT)
     assert r.returncode == 0, r.stderr
     assert r.stdout.strip() == compute_experiment_id(load_experiment_yaml(SMOKE))
 
@@ -166,8 +166,21 @@ def test_run_with_ray_launcher(tmp_path, capsys):
     try:
         path = _write_yaml(tmp_path / "e.yaml", **{"resources.workers": 2, "resources.cpu": 1})
         art = tmp_path / "artifacts"
-        rc = main(["run", str(path), "--tracker", "inmemory", "--launcher", "ray",
-                   "--ray-storage", str(tmp_path / "ray"), "--artifacts", str(art), "--json"])
+        rc = main(
+            [
+                "run",
+                str(path),
+                "--tracker",
+                "inmemory",
+                "--launcher",
+                "ray",
+                "--ray-storage",
+                str(tmp_path / "ray"),
+                "--artifacts",
+                str(art),
+                "--json",
+            ]
+        )
         assert rc == 0, capsys.readouterr().err
         payload = json.loads(capsys.readouterr().out)
         assert payload["status"] == "FINISHED" and payload["launcher"] == "ray"
@@ -292,7 +305,9 @@ def test_reproduce_unknown_run_id_exits_2(tmp_path, capsys):
 
 
 def test_reproduce_failed_run_exits_2(tmp_path, capsys):
-    path = _write_yaml(tmp_path / "e.yaml", **{"model.params": {"in_channels": 3, "out_channels": 2, "hidden": 4, "spatial_dims": 3}})
+    path = _write_yaml(
+        tmp_path / "e.yaml", **{"model.params": {"in_channels": 3, "out_channels": 2, "hidden": 4, "spatial_dims": 3}}
+    )
     art = tmp_path / "artifacts"
     assert main(["run", str(path), "--tracker", "inmemory", "--artifacts", str(art)]) == 1
     capsys.readouterr()
@@ -358,6 +373,7 @@ def probe(monkeypatch):
 
     def use(**kw):
         monkeypatch.setattr(cli, "_probe", lambda: FixedProbe(**kw))
+
     use()
     return use
 
@@ -422,8 +438,10 @@ def test_run_checkpoint_every_writes_checkpoint(tmp_path, capsys):
 
     art = tmp_path / "artifacts"
     yml = _write_yaml(tmp_path / "e.yaml", **{"training.epochs": 2})
-    assert main(["run", str(yml), "--tracker", "inmemory", "--artifacts", str(art),
-                 "--checkpoint-every", "1", "--json"]) == 0
+    assert (
+        main(["run", str(yml), "--tracker", "inmemory", "--artifacts", str(art), "--checkpoint-every", "1", "--json"])
+        == 0
+    )
     run_id = json.loads(capsys.readouterr().out)["run_id"]
     # written while training (see the resume tests), dropped once the run FINISHED
     assert not (art / run_id / CHECKPOINT).exists()
@@ -434,8 +452,23 @@ def test_run_keep_checkpoint(tmp_path, capsys):
 
     art = tmp_path / "artifacts"
     yml = _write_yaml(tmp_path / "e.yaml", **{"training.epochs": 2})
-    assert main(["run", str(yml), "--tracker", "inmemory", "--artifacts", str(art),
-                 "--checkpoint-every", "1", "--keep-checkpoint", "--json"]) == 0
+    assert (
+        main(
+            [
+                "run",
+                str(yml),
+                "--tracker",
+                "inmemory",
+                "--artifacts",
+                str(art),
+                "--checkpoint-every",
+                "1",
+                "--keep-checkpoint",
+                "--json",
+            ]
+        )
+        == 0
+    )
     run_id = json.loads(capsys.readouterr().out)["run_id"]
     assert (art / run_id / CHECKPOINT).is_file()
 
@@ -474,8 +507,20 @@ def fake_ray(monkeypatch):
 
 
 def test_run_checkpoint_every_goes_to_the_ray_launcher(tmp_path, capsys, fake_ray):
-    rc = main(["run", str(SMOKE), "--tracker", "inmemory", "--artifacts", str(tmp_path),
-               "--launcher", "ray", "--checkpoint-every", "3"])
+    rc = main(
+        [
+            "run",
+            str(SMOKE),
+            "--tracker",
+            "inmemory",
+            "--artifacts",
+            str(tmp_path),
+            "--launcher",
+            "ray",
+            "--checkpoint-every",
+            "3",
+        ]
+    )
     assert rc == 0, capsys.readouterr().err
     assert fake_ray.launched[0]["checkpoint_every"] == 3
 
@@ -489,10 +534,10 @@ def test_resume_of_a_ray_run_goes_back_through_ray(tmp_path, capsys, fake_ray):
     run_id = compute_run_id(compute_experiment_id(spec), spec.resources, 2)
     store = LocalArtifactStore(tmp_path)
     save_spec(store, run_id, spec)
-    save_launch(store, run_id, LaunchRecord(launcher="ray", attempt=2, checkpoint_every=1,
-                                            storage_path="/shared/ray"))
-    rc = main(["resume", run_id, "--artifacts", str(tmp_path), "--tracker", "inmemory",
-               "--ray-address", "ray://head:10001"])
+    save_launch(store, run_id, LaunchRecord(launcher="ray", attempt=2, checkpoint_every=1, storage_path="/shared/ray"))
+    rc = main(
+        ["resume", run_id, "--artifacts", str(tmp_path), "--tracker", "inmemory", "--ray-address", "ray://head:10001"]
+    )
     assert rc == 0, capsys.readouterr().err
     assert fake_ray.made[0]["storage_path"] == "/shared/ray"
     assert fake_ray.made[0]["address"] == "ray://head:10001"
@@ -640,8 +685,13 @@ def _fake_kubectl(monkeypatch, stdout="", returncode=0, stderr=""):
 
 
 def _job(status, deployment="Running", message=""):
-    return json.dumps({"kind": "RayJob", "metadata": {"name": "mlops-abc-a1", "annotations": {"mlops.io/run-id": "r" * 64}},
-                       "status": {"jobStatus": status, "jobDeploymentStatus": deployment, "message": message}})
+    return json.dumps(
+        {
+            "kind": "RayJob",
+            "metadata": {"name": "mlops-abc-a1", "annotations": {"mlops.io/run-id": "r" * 64}},
+            "status": {"jobStatus": status, "jobDeploymentStatus": deployment, "message": message},
+        }
+    )
 
 
 @pytest.mark.parametrize("status,rc", [("RUNNING", 0), ("SUCCEEDED", 0), ("FAILED", 1), ("STOPPED", 1)])
@@ -701,9 +751,9 @@ def test_rayjob_for_synthetic_data_needs_no_volume(capsys):
 
 def test_not_reproduced_explains_with_environment_differences(finished_run, capsys, monkeypatch):
     import mlops.cli as cli
+    from mlops.adapters.local_artifacts import LocalArtifactStore
     from tests.test_environment import FixedProbe
     from tests.test_reproduce import _edit_weights
-    from mlops.adapters.local_artifacts import LocalArtifactStore
 
     art, run_id = finished_run
     _edit_weights(LocalArtifactStore(art), run_id, delta=1.0)
@@ -722,13 +772,19 @@ _RESUMABLE = ["--data-pvc", "msd", "--artifacts-pvc", "runs", "--ray-storage-pvc
 def test_rayjob_checkpointing_reaches_the_manifest(capsys):
     assert main(["rayjob", str(BASELINE), *_RESUMABLE, "--checkpoint-every", "5"]) == 0
     job = json.loads(capsys.readouterr().out)["items"][1]
-    assert "--checkpoint-every 5" in job["spec"]["entrypoint"] and "--ray-storage /ray-storage" in job["spec"]["entrypoint"]
+    assert (
+        "--checkpoint-every 5" in job["spec"]["entrypoint"]
+        and "--ray-storage /ray-storage" in job["spec"]["entrypoint"]
+    )
 
 
-@pytest.mark.parametrize("flags,hint", [
-    (["--data-pvc", "msd", "--artifacts-pvc", "runs"], "--ray-storage-pvc"),
-    (["--data-pvc", "msd", "--ray-storage-pvc", "ray-ckpt"], "--artifacts-pvc"),
-])
+@pytest.mark.parametrize(
+    "flags,hint",
+    [
+        (["--data-pvc", "msd", "--artifacts-pvc", "runs"], "--ray-storage-pvc"),
+        (["--data-pvc", "msd", "--ray-storage-pvc", "ray-ckpt"], "--artifacts-pvc"),
+    ],
+)
 @pytest.mark.parametrize("mode", [["--checkpoint-every", "5"], ["--resume"]])
 def test_rayjob_resumability_without_pvcs_exits_2(capsys, flags, hint, mode):
     assert main(["rayjob", str(BASELINE), *flags, *mode]) == 2
@@ -754,8 +810,9 @@ def _fake_cluster(monkeypatch, jobs=(), create_rc=0):
 
         class R:
             returncode, stderr = 0, ""
-            stdout = json.dumps({"kind": "List", "items": [
-                {"metadata": {"name": n}, "status": {"jobStatus": st}} for n, st in jobs]})
+            stdout = json.dumps(
+                {"kind": "List", "items": [{"metadata": {"name": n}, "status": {"jobStatus": st}} for n, st in jobs]}
+            )
 
         if "create" in cmd:
             R.returncode = create_rc
@@ -802,8 +859,12 @@ def test_diff_says_where_the_curves_split(tmp_path, capsys):
     assert main(["diff", a, b, "--artifacts", str(art)]) == 0
     assert "history: identical over all 3 epochs" in capsys.readouterr().out
 
-    c = _run_json(capsys, str(_write_yaml(tmp_path / "s.yaml", **{"training.epochs": 3, "training.seed": 7})),
-                  "--artifacts", str(art))
+    c = _run_json(
+        capsys,
+        str(_write_yaml(tmp_path / "s.yaml", **{"training.epochs": 3, "training.seed": 7})),
+        "--artifacts",
+        str(art),
+    )
     assert main(["diff", a, c, "--artifacts", str(art), "--atol", "1e-9"]) == 1
     out = capsys.readouterr().out
     assert "history: identical for 0 epochs, first differs at epoch 1" in out and "train/loss" in out

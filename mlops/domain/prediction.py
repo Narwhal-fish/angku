@@ -65,8 +65,9 @@ class PredictionRecord(_Frozen):
     notes: list[str] = Field(default_factory=list)
 
 
-def compute_result_id(*, kind: str, members: list[Member], part: str, dataset_snapshot: str | None,
-                      method: dict[str, Any]) -> str:
+def compute_result_id(
+    *, kind: str, members: list[Member], part: str, dataset_snapshot: str | None, method: dict[str, Any]
+) -> str:
     payload = {
         "kind": kind,
         "members": [{"run_id": m.run_id, "weights": m.weights} for m in members],

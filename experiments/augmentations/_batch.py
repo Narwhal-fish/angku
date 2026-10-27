@@ -18,9 +18,7 @@ from torch import Tensor
 
 def n_spatial(x: Tensor, y: Tensor) -> int:
     if x.ndim < 3 or y.ndim != x.ndim - 1 or x.shape[0] != y.shape[0] or x.shape[2:] != y.shape[1:]:
-        raise ValueError(
-            f"expected x (N, C, *spatial) and y (N, *spatial); got x {tuple(x.shape)}, y {tuple(y.shape)}"
-        )
+        raise ValueError(f"expected x (N, C, *spatial) and y (N, *spatial); got x {tuple(x.shape)}, y {tuple(y.shape)}")
     return x.ndim - 2
 
 

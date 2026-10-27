@@ -51,11 +51,18 @@ class RunSummary:
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "run_id": self.run_id, "experiment_id": self.experiment_id, "name": self.name,
-            "status": self.status, "attempt": self.attempt, "epochs_done": self.epochs_done,
+            "run_id": self.run_id,
+            "experiment_id": self.experiment_id,
+            "name": self.name,
+            "status": self.status,
+            "attempt": self.attempt,
+            "epochs_done": self.epochs_done,
             "epochs_total": self.epochs_total,
             "final_metrics": {k: None if math.isnan(v) else v for k, v in self.final_metrics.items()},
-            "workers": self.workers, "resumes": self.resumes, "resumable": self.resumable, "error": self.error,
+            "workers": self.workers,
+            "resumes": self.resumes,
+            "resumable": self.resumable,
+            "error": self.error,
             "best": self.best.model_dump() if self.best is not None else None,
             "updated": self.updated,
         }
@@ -95,8 +102,11 @@ class ExperimentGroup:
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "experiment_id": self.experiment_id, "name": self.name, "finished": self.finished,
-            "metrics_agree": self.metrics_agree, "atol": self.atol,
+            "experiment_id": self.experiment_id,
+            "name": self.name,
+            "finished": self.finished,
+            "metrics_agree": self.metrics_agree,
+            "atol": self.atol,
             "spread": {k: list(v) for k, v in self.spread.items()},
             "runs": [r.to_dict() for r in self.runs],
         }
@@ -129,20 +139,26 @@ def _summarise(store: ArtifactStore, run_id: str, files: list[str], now: float) 
         spec = ExperimentSpec.model_validate_json(store.get(run_id, SPEC))
         manifest = RunManifest.model_validate_json(store.get(run_id, MANIFEST)) if MANIFEST in files else None
     except (ValidationError, ValueError) as e:
-        return RunSummary(run_id=run_id, experiment_id="?", name="?", status="UNREADABLE",
-                          error=str(e).splitlines()[0])
+        return RunSummary(run_id=run_id, experiment_id="?", name="?", status="UNREADABLE", error=str(e).splitlines()[0])
     # local runs keep checkpoint.pt here; Ray runs keep theirs in Ray storage and leave launch.json
     has_ckpt = CHECKPOINT in files or LAUNCH in files
     base = dict(
-        run_id=run_id, experiment_id=compute_experiment_id(spec), name=spec.meta.name,
-        epochs_total=spec.training.epochs, workers=spec.resources.workers,
+        run_id=run_id,
+        experiment_id=compute_experiment_id(spec),
+        name=spec.meta.name,
+        epochs_total=spec.training.epochs,
+        workers=spec.resources.workers,
     )
     if manifest is None:
         progress = read_progress(store, run_id) if PROGRESS in files else None
         if progress is not None and is_live(progress, now=now):
-            return RunSummary(**base, status="RUNNING", epochs_done=progress.epoch,
-                              final_metrics=dict(progress.history[-1]) if progress.history else {},
-                              updated=progress.updated)
+            return RunSummary(
+                **base,
+                status="RUNNING",
+                epochs_done=progress.epoch,
+                final_metrics=dict(progress.history[-1]) if progress.history else {},
+                updated=progress.updated,
+            )
         return RunSummary(**base, status="INTERRUPTED" if has_ckpt else "INCOMPLETE", resumable=has_ckpt)
     return RunSummary(
         **base,

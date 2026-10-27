@@ -69,9 +69,7 @@ def _data() -> SyntheticBlobs:
 
 
 def _reproduce(store, run_id, **kw) -> ReproduceReport:
-    return reproduce_run(
-        store, run_id, data=_data(), tracker=InMemoryTracker(), scratch=InMemoryArtifactStore(), **kw
-    )
+    return reproduce_run(store, run_id, data=_data(), tracker=InMemoryTracker(), scratch=InMemoryArtifactStore(), **kw)
 
 
 # --- tampering helpers: corrupt one thing in the bundle, leave the rest alone ---
@@ -235,9 +233,7 @@ def test_replay_failure_propagates_and_is_not_reported_as_a_mismatch(spec, store
             raise RuntimeError("disk on fire")
 
     with pytest.raises(RuntimeError, match="disk on fire"):
-        reproduce_run(
-            store, run_id, data=ExplodingLoader(), tracker=InMemoryTracker(), scratch=InMemoryArtifactStore()
-        )
+        reproduce_run(store, run_id, data=ExplodingLoader(), tracker=InMemoryTracker(), scratch=InMemoryArtifactStore())
 
 
 def test_undefined_metric_on_both_sides_is_not_a_mismatch(spec, store):
@@ -253,9 +249,7 @@ def test_undefined_metric_on_both_sides_is_not_a_mismatch(spec, store):
         def _nan(p: _NoParams):
             return lambda logits, target: {"never": torch.full((logits.shape[0],), float("nan"))}
 
-    spec = load_experiment_dict(
-        {**spec.model_dump(), "metrics": [{"name": "_test_reproduce_nan", "params": {}}]}
-    )
+    spec = load_experiment_dict({**spec.model_dump(), "metrics": [{"name": "_test_reproduce_nan", "params": {}}]})
     run_id = run_experiment(spec, data=_data(), tracker=InMemoryTracker(), artifacts=store).run_id
     report = _reproduce(store, run_id)
     assert report.ok, report.mismatches
@@ -267,8 +261,9 @@ def test_undefined_metric_on_both_sides_is_not_a_mismatch(spec, store):
 def test_replay_records_its_environment_and_diffs_it_against_the_original(spec, store):
     from tests.test_environment import FixedProbe
 
-    run_id = run_experiment(spec, data=_data(), tracker=InMemoryTracker(), artifacts=store,
-                            probe=FixedProbe(commit_ok=True)).run_id
+    run_id = run_experiment(
+        spec, data=_data(), tracker=InMemoryTracker(), artifacts=store, probe=FixedProbe(commit_ok=True)
+    ).run_id
     report = _reproduce(store, run_id, probe=FixedProbe(commit_ok=False))
     assert report.ok  # same weights: the env difference did not matter this time
     changes = {c.path: c for c in report.environment}
@@ -278,8 +273,7 @@ def test_replay_records_its_environment_and_diffs_it_against_the_original(spec, 
 def test_same_environment_gives_no_environment_changes(spec, store):
     from tests.test_environment import FixedProbe
 
-    run_id = run_experiment(spec, data=_data(), tracker=InMemoryTracker(), artifacts=store,
-                            probe=FixedProbe()).run_id
+    run_id = run_experiment(spec, data=_data(), tracker=InMemoryTracker(), artifacts=store, probe=FixedProbe()).run_id
     assert _reproduce(store, run_id, probe=FixedProbe()).environment == []
 
 
@@ -293,7 +287,8 @@ def test_environment_not_recorded_on_either_side_is_said_once(spec, store, run_i
 def test_environment_changes_are_in_the_json(spec, store):
     from tests.test_environment import FixedProbe
 
-    run_id = run_experiment(spec, data=_data(), tracker=InMemoryTracker(), artifacts=store,
-                            probe=FixedProbe(commit_ok=True)).run_id
+    run_id = run_experiment(
+        spec, data=_data(), tracker=InMemoryTracker(), artifacts=store, probe=FixedProbe(commit_ok=True)
+    ).run_id
     out = json.loads(json.dumps(_reproduce(store, run_id, probe=FixedProbe(commit_ok=False)).to_dict()))
     assert {"path": "code.changed", "a": [], "b": ["mlops/x.py"]} in out["environment"]

@@ -52,9 +52,7 @@ class SyntheticBlobs:
         self._check(dataset)
         return [f"case-{i:03d}" for i in range(self.n_train + self.n_val)]
 
-    def load(
-        self, dataset: Dataset, preprocessing: dict[str, Any], split: SplitAssignment | None = None
-    ) -> DataSplits:
+    def load(self, dataset: Dataset, preprocessing: dict[str, Any], split: SplitAssignment | None = None) -> DataSplits:
         self._check(dataset)
         if preprocessing:
             raise DataError(f"SyntheticBlobs has no preprocessing options, got {sorted(preprocessing)}")

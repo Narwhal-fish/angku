@@ -39,7 +39,5 @@ def build_swinunetr(p: SwinUNETRParams) -> nn.Module:
     try:
         from monai.networks.nets import SwinUNETR
     except ImportError as e:
-        raise ImportError(
-            "model 'swinunetr' needs MONAI: uv pip install -e \".[medical]\""
-        ) from e
+        raise ImportError("model 'swinunetr' needs MONAI: uv pip install -e \".[medical]\"") from e
     return SwinUNETR(**p.model_dump())

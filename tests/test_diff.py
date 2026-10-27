@@ -99,13 +99,21 @@ def test_added_section_shows_as_absent_on_one_side(spec, store):
 
 
 def test_labels_change_neither_id(spec, store):
-    b_spec = _with(spec, meta__name="renamed", tracking__experiment_name="other",
-                   environment__image="ghcr.io/x/y:9.9", dataset__version="v2")
+    b_spec = _with(
+        spec,
+        meta__name="renamed",
+        tracking__experiment_name="other",
+        environment__image="ghcr.io/x/y:9.9",
+        dataset__version="v2",
+    )
     other = InMemoryArtifactStore()  # same run_id: in one store the second bundle would replace the first
     d = diff_runs(store, _run(store, spec), other, _run(other, b_spec))
     assert d.same_experiment and d.same_run
     assert [c.path for c in d.labels] == [
-        "dataset.version", "environment.image", "meta.name", "tracking.experiment_name",
+        "dataset.version",
+        "environment.image",
+        "meta.name",
+        "tracking.experiment_name",
     ]
     assert d.experiment == [] and d.run == []
 

@@ -18,6 +18,7 @@ dev = [
     "mlflow>=3.0",  # so the MLflow tracker tests run on the dev box
     "ray[train]>=2.40",  # so the Ray launcher tests run on the dev box
     "textual>=8.0",  # so the `mlops ui` tests run on the dev box
+    "ruff==0.17.0",  # pinned: CI runs the same version, a new release must not fail old code
 ]
 # Optional tracking backends. The core never imports them at module import time.
 tracking = [
@@ -51,3 +52,22 @@ packages = ["mlops"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.format]
+# Code blocks in README are written for people to read, not formatted.
+exclude = ["*.md"]
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "UP"]
+
+[tool.ruff.lint.flake8-bugbear]
+# Frozen dataclasses: one shared default instance is safe.
+extend-immutable-calls = ["mlops.application.runner.Worker"]
+
+[tool.ruff.lint.per-file-ignores]
+# A test that takes a pytest fixture as an argument shadows the fixture function's name.
+"tests/**" = ["F811"]

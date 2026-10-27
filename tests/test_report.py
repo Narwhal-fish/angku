@@ -23,7 +23,6 @@ from mlops.application.report import REPORT, render_report, write_report
 from mlops.config import load_experiment_yaml
 from mlops.domain import RunManifest
 from mlops.registry import discover
-
 from tests.test_reproduce import CONFIGS
 
 
@@ -91,10 +90,16 @@ def test_fingerprint_section_lists_every_pin_and_setting(bundle):
     body = _section(render_report(bundle), "Experiment")
     s = bundle.spec
     for expected in (
-        s.code.repo, s.code.commit,
-        s.environment.image, s.environment.image_digest,
-        s.dataset.name, s.dataset.version, s.dataset.snapshot,
-        s.model.name, s.loss.name, s.training.optimizer,
+        s.code.repo,
+        s.code.commit,
+        s.environment.image,
+        s.environment.image_digest,
+        s.dataset.name,
+        s.dataset.version,
+        s.dataset.snapshot,
+        s.model.name,
+        s.loss.name,
+        s.training.optimizer,
     ):
         assert expected in body, expected
     for param in s.model.params:
@@ -106,10 +111,14 @@ def test_fingerprint_section_lists_every_pin_and_setting(bundle):
 def test_augmentations_are_listed_in_order(spec):
     from mlops.domain.experiment import Augmentation
 
-    spec = spec.model_copy(update={"augmentation": [
-        Augmentation(name="rand_flip", params={"prob": 0.5, "spatial_axis": [0]}),
-        Augmentation(name="rand_rotate90", params={"prob": 0.1}),
-    ]})
+    spec = spec.model_copy(
+        update={
+            "augmentation": [
+                Augmentation(name="rand_flip", params={"prob": 0.5, "spatial_axis": [0]}),
+                Augmentation(name="rand_rotate90", params={"prob": 0.1}),
+            ]
+        }
+    )
     body = _section(render_report(_fake_bundle(spec)), "Experiment")
     assert body.index("rand_flip") < body.index("rand_rotate90")
     assert "prob" in body
@@ -128,7 +137,7 @@ def test_resources_show_world_size_and_per_worker_batch(bundle):
 
 def test_per_epoch_table_has_a_row_per_epoch(bundle):
     body = _section(render_report(bundle), "Training curves")
-    rows = [l for l in body.splitlines() if l.startswith("| ") and l.split("|")[1].strip().isdigit()]
+    rows = [line for line in body.splitlines() if line.startswith("| ") and line.split("|")[1].strip().isdigit()]
     assert [int(r.split("|")[1]) for r in rows] == [1, 2, 3]
     assert "train/loss" in body and "val/loss" in body
 
@@ -136,12 +145,12 @@ def test_per_epoch_table_has_a_row_per_epoch(bundle):
 def test_final_metrics_show_last_value_and_best_epoch(spec):
     history = [{"val/loss": 0.9}, {"val/loss": 0.3}, {"val/loss": 0.5}]
     body = _section(render_report(_fake_bundle(spec, history=history)), "Final metrics")
-    row = next(l for l in body.splitlines() if "val/loss" in l)
+    row = next(line for line in body.splitlines() if "val/loss" in line)
     cells = [c.strip() for c in row.strip("|").split("|")]
     assert cells[0] == "val/loss"
-    assert "0.5" in cells[1]               # final
-    assert "0.3" in cells[2] and "2" in cells[2]   # min, at epoch 2
-    assert "0.9" in cells[3] and "1" in cells[3]   # max, at epoch 1
+    assert "0.5" in cells[1]  # final
+    assert "0.3" in cells[2] and "2" in cells[2]  # min, at epoch 2
+    assert "0.9" in cells[3] and "1" in cells[3]  # max, at epoch 1
 
 
 def test_curves_include_a_sparkline(spec):

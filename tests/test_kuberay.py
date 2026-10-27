@@ -97,15 +97,22 @@ def test_render_without_gpu_has_no_gpu_limit(spec):
 
 def test_render_options(spec):
     cm, job = render_rayjob(
-        spec, namespace="ml", attempt=2, artifacts_pvc="runs-pvc", artifacts_path="/mnt/runs", mlflow_uri="http://mlflow:5000"
+        spec,
+        namespace="ml",
+        attempt=2,
+        artifacts_pvc="runs-pvc",
+        artifacts_path="/mnt/runs",
+        mlflow_uri="http://mlflow:5000",
     )
     assert cm["metadata"]["namespace"] == job["metadata"]["namespace"] == "ml"
     assert job["metadata"]["name"].endswith("-a2")
     entry = job["spec"]["entrypoint"]
     assert "--attempt 2" in entry and "--artifacts /mnt/runs" in entry and "--mlflow-uri http://mlflow:5000" in entry
     head, _, worker = _containers(job)
-    for pod in (job["spec"]["rayClusterSpec"]["headGroupSpec"]["template"]["spec"],
-                job["spec"]["rayClusterSpec"]["workerGroupSpecs"][0]["template"]["spec"]):
+    for pod in (
+        job["spec"]["rayClusterSpec"]["headGroupSpec"]["template"]["spec"],
+        job["spec"]["rayClusterSpec"]["workerGroupSpecs"][0]["template"]["spec"],
+    ):
         names = {v["name"]: v for v in pod["volumes"]}
         assert names["artifacts"]["persistentVolumeClaim"]["claimName"] == "runs-pvc"
         assert names["experiment"]["configMap"]["name"] == cm["metadata"]["name"]
@@ -180,15 +187,24 @@ def test_pods_know_which_image_they_run_in(spec):
 
 
 def _rayjob_json(job_status="RUNNING", deployment="Running", message="", **status):
-    return json.dumps({
-        "kind": "RayJob",
-        "metadata": {
-            "name": "mlops-abc-a1", "namespace": "ml",
-            "annotations": {"mlops.io/run-id": "r" * 64, "mlops.io/experiment-id": "e" * 64},
-        },
-        "status": {"jobStatus": job_status, "jobDeploymentStatus": deployment, "message": message,
-                   "dashboardURL": "head-svc:8265", "startTime": "2026-10-13T10:00:00Z", **status},
-    })
+    return json.dumps(
+        {
+            "kind": "RayJob",
+            "metadata": {
+                "name": "mlops-abc-a1",
+                "namespace": "ml",
+                "annotations": {"mlops.io/run-id": "r" * 64, "mlops.io/experiment-id": "e" * 64},
+            },
+            "status": {
+                "jobStatus": job_status,
+                "jobDeploymentStatus": deployment,
+                "message": message,
+                "dashboardURL": "head-svc:8265",
+                "startTime": "2026-10-13T10:00:00Z",
+                **status,
+            },
+        }
+    )
 
 
 class _FakeGet:
@@ -220,10 +236,17 @@ def test_status_reads_the_rayjob_through_kubectl():
     assert s.dashboard_url == "head-svc:8265" and s.end_time == "2026-10-13T11:00:00Z"
 
 
-@pytest.mark.parametrize("job,finished,succeeded", [
-    ("PENDING", False, False), ("RUNNING", False, False), ("SUCCEEDED", True, True),
-    ("FAILED", True, False), ("STOPPED", True, False), ("", False, False),
-])
+@pytest.mark.parametrize(
+    "job,finished,succeeded",
+    [
+        ("PENDING", False, False),
+        ("RUNNING", False, False),
+        ("SUCCEEDED", True, True),
+        ("FAILED", True, False),
+        ("STOPPED", True, False),
+        ("", False, False),
+    ],
+)
 def test_status_terminal_states(job, finished, succeeded):
     from mlops.adapters.kuberay import rayjob_status
 
@@ -338,10 +361,13 @@ def test_no_checkpointing_no_ray_storage(spec):
         assert "ray-storage" not in {v["name"] for v in pod["volumes"]}
 
 
-@pytest.mark.parametrize("kw,missing", [
-    ({"ray_storage_pvc": "ray-ckpt"}, "artifacts_pvc"),
-    ({"artifacts_pvc": "runs"}, "ray_storage_pvc"),
-])
+@pytest.mark.parametrize(
+    "kw,missing",
+    [
+        ({"ray_storage_pvc": "ray-ckpt"}, "artifacts_pvc"),
+        ({"artifacts_pvc": "runs"}, "ray_storage_pvc"),
+    ],
+)
 @pytest.mark.parametrize("mode", [{"checkpoint_every": 5}, {"resume": True}])
 def test_resumability_needs_both_pvcs(spec, kw, missing, mode):
     # Without them the checkpoints / launch.json die with the cluster: refuse instead of
@@ -356,7 +382,10 @@ def test_checkpoint_every_must_be_positive(spec):
 
 
 def test_resume_job_runs_mlops_resume_for_the_same_run(spec):
-    (fresh_cm, fresh), (job,) = _resumable(spec, attempt=2, checkpoint_every=5), _resumable(spec, attempt=2, resume=True)
+    (_, fresh), (job,) = (
+        _resumable(spec, attempt=2, checkpoint_every=5),
+        _resumable(spec, attempt=2, resume=True),
+    )
     rid = compute_run_id(compute_experiment_id(spec), spec.resources, attempt=2)
     assert job["kind"] == "RayJob"
     assert job["metadata"]["annotations"] == fresh["metadata"]["annotations"]
@@ -376,7 +405,10 @@ def test_resume_job_runs_mlops_resume_for_the_same_run(spec):
     for pod in _pods(job):
         assert "experiment" not in {v["name"] for v in pod["volumes"]}
         assert {m["name"]: m["mountPath"] for m in _mounts(pod).values()} == {
-            "artifacts": "/artifacts", "ray-storage": "/ray-storage", "data": "/data"}
+            "artifacts": "/artifacts",
+            "ray-storage": "/ray-storage",
+            "data": "/data",
+        }
     assert _containers(job)[0]["image"] == _containers(fresh)[0]["image"]
 
 
@@ -410,11 +442,17 @@ def test_resume_job_is_created_and_its_generated_name_returned(spec):
 def test_active_rayjobs_of_a_run_are_found_by_label(spec):
     from mlops.adapters.kuberay import active_rayjobs
 
-    listing = json.dumps({"kind": "List", "items": [
-        json.loads(_rayjob_json(job_status="FAILED")) | {"metadata": {"name": "mlops-abc-a1"}},
-        json.loads(_rayjob_json(job_status="RUNNING")) | {"metadata": {"name": "mlops-abc-a1-resume-x8k2p"}},
-        json.loads(_rayjob_json(job_status="")) | {"metadata": {"name": "mlops-abc-a1-resume-q4z7d"}},  # just created
-    ]})
+    listing = json.dumps(
+        {
+            "kind": "List",
+            "items": [
+                json.loads(_rayjob_json(job_status="FAILED")) | {"metadata": {"name": "mlops-abc-a1"}},
+                json.loads(_rayjob_json(job_status="RUNNING")) | {"metadata": {"name": "mlops-abc-a1-resume-x8k2p"}},
+                json.loads(_rayjob_json(job_status=""))
+                | {"metadata": {"name": "mlops-abc-a1-resume-q4z7d"}},  # just created
+            ],
+        }
+    )
     kubectl = _FakeGet(listing)
     rid = compute_run_id(compute_experiment_id(spec), spec.resources, attempt=1)
     active = active_rayjobs(rid, namespace="ml", run=kubectl)
@@ -436,14 +474,22 @@ def test_active_rayjobs_reports_kubectl_failure():
 def test_list_rayjobs_finds_every_job_we_rendered():
     from mlops.adapters.kuberay import list_rayjobs
 
-    listing = json.dumps({"kind": "List", "items": [
-        json.loads(_rayjob_json(job_status="SUCCEEDED", deployment="Complete")) | {"metadata": {"name": "mlops-a-a1"}},
-        json.loads(_rayjob_json(job_status="RUNNING")) | {"metadata": {"name": "mlops-b-a1"}},
-    ]})
+    listing = json.dumps(
+        {
+            "kind": "List",
+            "items": [
+                json.loads(_rayjob_json(job_status="SUCCEEDED", deployment="Complete"))
+                | {"metadata": {"name": "mlops-a-a1"}},
+                json.loads(_rayjob_json(job_status="RUNNING")) | {"metadata": {"name": "mlops-b-a1"}},
+            ],
+        }
+    )
     kubectl = _FakeGet(listing)
     jobs = list_rayjobs(namespace="ml", kubectl=["kubectl", "--context", "x"], run=kubectl)
     assert [(j.name, j.job_status, j.finished) for j in jobs] == [
-        ("mlops-a-a1", "SUCCEEDED", True), ("mlops-b-a1", "RUNNING", False)]
+        ("mlops-a-a1", "SUCCEEDED", True),
+        ("mlops-b-a1", "RUNNING", False),
+    ]
     ((cmd, _),) = kubectl.calls
     assert cmd == ["kubectl", "--context", "x", "get", "rayjob", "-n", "ml", "-l", "mlops.io/run", "-o", "json"]
     with pytest.raises(KubeRayError, match="forbidden"):

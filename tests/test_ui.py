@@ -57,8 +57,16 @@ SMOKE = ROOT / "experiments/configs/tiny_cnn_smoke.yaml"
 
 
 def _summary(**kw) -> RunSummary:
-    base = dict(run_id="a" * 64, experiment_id="e" * 64, name="exp", status="FINISHED", attempt=1,
-                epochs_done=3, epochs_total=3, final_metrics={"train/loss": 0.5, "val/loss": 0.25})
+    base = dict(
+        run_id="a" * 64,
+        experiment_id="e" * 64,
+        name="exp",
+        status="FINISHED",
+        attempt=1,
+        epochs_done=3,
+        epochs_total=3,
+        final_metrics={"train/loss": 0.5, "val/loss": 0.25},
+    )
     return RunSummary(**{**base, **kw})
 
 
@@ -69,8 +77,12 @@ def test_experiment_row():
     one = ExperimentGroup("e" * 64, "exp", [_summary()])
     same = ExperimentGroup("e" * 64, "exp", [_summary(), _summary(run_id="b" * 64, attempt=2)])
     differ = ExperimentGroup("e" * 64, "exp", [_summary(), _summary(run_id="b" * 64, final_metrics={"val/loss": 0.3})])
-    close = ExperimentGroup("e" * 64, "exp", [_summary(), _summary(run_id="b" * 64, final_metrics={
-        "train/loss": 0.5, "val/loss": 0.255})], atol=0.01)
+    close = ExperimentGroup(
+        "e" * 64,
+        "exp",
+        [_summary(), _summary(run_id="b" * 64, final_metrics={"train/loss": 0.5, "val/loss": 0.255})],
+        atol=0.01,
+    )
     assert EXPERIMENT_COLUMNS == ("NAME", "EXPERIMENT", "RUNS", "FINISHED", "AGREE")
     assert experiment_row(one) == ("exp", "e" * 12, "1", "1", "-")
     assert experiment_row(same)[-1] == "yes"
@@ -91,7 +103,13 @@ def test_run_row_and_columns():
     assert run_columns(None) == ("RUN", "ATTEMPT", "STATUS", "EPOCHS", "NOTES")
     best = BestRecord(metric="val/loss", mode="min", epoch=2, value=0.2)
     assert run_row(_summary(best=best, resumes=1), "val/loss") == (
-        "a" * 12, "1", "FINISHED", "3/3", "0.25", "best val/loss@2; resumed x1")
+        "a" * 12,
+        "1",
+        "FINISHED",
+        "3/3",
+        "0.25",
+        "best val/loss@2; resumed x1",
+    )
     interrupted = _summary(status="INTERRUPTED", attempt=None, epochs_done=None, final_metrics={}, resumable=True)
     assert run_row(interrupted, "val/loss") == ("a" * 12, "?", "INTERRUPTED", "?/3", "—", "resumable")
     assert run_row(_summary(final_metrics={"val/loss": math.nan}), None) == ("a" * 12, "1", "FINISHED", "3/3", "")
@@ -102,7 +120,10 @@ def test_metric_rows_match_the_report():
     rows = metric_rows(history)
     assert [r[:4] for r in rows] == final_metric_rows(history)
     assert rows[0][4] == sparkline([3.0, 2.0, 1.0])
-    assert history_rows(history) == (("epoch", "loss", "acc"), [("1", "3", "0.1"), ("2", "2", "0.4"), ("3", "1", "0.3")])
+    assert history_rows(history) == (
+        ("epoch", "loss", "acc"),
+        [("1", "3", "0.1"), ("2", "2", "0.4"), ("3", "1", "0.3")],
+    )
     assert metric_rows([]) == [] and history_rows([]) == (("epoch",), [])
 
 
@@ -123,26 +144,55 @@ def test_overview_without_manifest():
 
 
 def test_resume_lines():
-    result = RunResult(experiment_id="e" * 64, run_id="a" * 64, device="cpu", history=[{"loss": 1.0}] * 3,
-                       resumes=[ResumePoint(epoch=2)])
+    result = RunResult(
+        experiment_id="e" * 64,
+        run_id="a" * 64,
+        device="cpu",
+        history=[{"loss": 1.0}] * 3,
+        resumes=[ResumePoint(epoch=2)],
+    )
     assert resume_lines("exp", result) == [
-        "exp: FINISHED", f"  run_id         {'a' * 64}", "  resumed after epoch 2", "  epochs         3"]
+        "exp: FINISHED",
+        f"  run_id         {'a' * 64}",
+        "  resumed after epoch 2",
+        "  epochs         3",
+    ]
 
 
 def _job(**kw):
     from mlops.adapters.kuberay import RayJobStatus
 
-    base = dict(name="mlops-abc-a1", job_status="RUNNING", deployment_status="Running",
-                start_time="2026-10-13T10:00:00Z", run_id="a" * 64, experiment_id="e" * 64,
-                dashboard_url="head-svc:8265")
+    base = dict(
+        name="mlops-abc-a1",
+        job_status="RUNNING",
+        deployment_status="Running",
+        start_time="2026-10-13T10:00:00Z",
+        run_id="a" * 64,
+        experiment_id="e" * 64,
+        dashboard_url="head-svc:8265",
+    )
     return RayJobStatus(**{**base, **kw})
 
 
 def test_rayjob_rows():
     assert rayjob_row(_job(), in_store=True) == (
-        "mlops-abc-a1", "a" * 12, "RUNNING", "Running", "2026-10-13T10:00:00Z", "-", "here")
+        "mlops-abc-a1",
+        "a" * 12,
+        "RUNNING",
+        "Running",
+        "2026-10-13T10:00:00Z",
+        "-",
+        "here",
+    )
     assert rayjob_row(_job(run_id=None, job_status="", deployment_status=""), in_store=False) == (
-        "mlops-abc-a1", "-", "-", "-", "2026-10-13T10:00:00Z", "-", "")
+        "mlops-abc-a1",
+        "-",
+        "-",
+        "-",
+        "2026-10-13T10:00:00Z",
+        "-",
+        "",
+    )
     rows = dict(rayjob_detail_rows(_job(message="boom")))
     assert rows["run_id"] == "a" * 64 and rows["message"] == "boom" and rows["dashboard"] == "head-svc:8265"
 
@@ -249,8 +299,11 @@ def test_enter_drills_down_and_escape_goes_back(artifacts):
 
 
 def _finished_run_id(art: Path) -> str:
-    return next(d.name for d in sorted(art.iterdir())
-                if (d / MANIFEST).exists() and json.loads((d / MANIFEST).read_text())["status"] == "FINISHED")
+    return next(
+        d.name
+        for d in sorted(art.iterdir())
+        if (d / MANIFEST).exists() and json.loads((d / MANIFEST).read_text())["status"] == "FINISHED"
+    )
 
 
 def test_run_screen_tabs(artifacts):
@@ -341,8 +394,11 @@ def test_cli_ui_starts_the_app(artifacts, monkeypatch):
     from mlops.ui.app import MlopsApp
 
     seen = {}
-    monkeypatch.setattr(MlopsApp, "run", lambda self: seen.update(
-        label=self.label, refresh=self.refresh_every, actions=self.actions, atol=self.atol))
+    monkeypatch.setattr(
+        MlopsApp,
+        "run",
+        lambda self: seen.update(label=self.label, refresh=self.refresh_every, actions=self.actions, atol=self.atol),
+    )
     assert main(["ui", "--artifacts", str(artifacts), "--refresh", "5", "--atol", "0.1"]) == 0
     assert seen["label"] == str(artifacts) and seen["refresh"] == 5.0 and seen["atol"] == 0.1
     assert isinstance(seen["actions"], UiActions)
@@ -376,13 +432,18 @@ class FakeActions:
             self.gate.wait(10)
         if self.fail:
             raise RuntimeError("boom")
-        return ReproduceReport(run_id=run_id, experiment_id="e" * 64, replay_run_id=run_id,
-                               checks={"run_id": True, "history": True, "weights": True})
+        return ReproduceReport(
+            run_id=run_id,
+            experiment_id="e" * 64,
+            replay_run_id=run_id,
+            checks={"run_id": True, "history": True, "weights": True},
+        )
 
     def resume(self, run_id: str) -> RunResult:
         self.calls.append(("resume", run_id))
-        return RunResult(experiment_id="e" * 64, run_id=run_id, device="cpu", history=[{"loss": 1.0}],
-                         resumes=[ResumePoint(epoch=1)])
+        return RunResult(
+            experiment_id="e" * 64, run_id=run_id, device="cpu", history=[{"loss": 1.0}], resumes=[ResumePoint(epoch=1)]
+        )
 
     def ui(self) -> UiActions:
         return UiActions(reproduce=self.reproduce, resume=self.resume)
@@ -574,8 +635,22 @@ def test_cli_ui_actions_reproduce_and_resume_for_real(tmp_path):
     data = yaml.safe_load(SMOKE.read_text())
     data["training"]["epochs"] = 2
     (tmp_path / "two.yaml").write_text(yaml.safe_dump(data))
-    assert main(["run", str(tmp_path / "two.yaml"), "--tracker", "inmemory", "--artifacts", str(art),
-                 "--checkpoint-every", "1", "--keep-checkpoint"]) == 0
+    assert (
+        main(
+            [
+                "run",
+                str(tmp_path / "two.yaml"),
+                "--tracker",
+                "inmemory",
+                "--artifacts",
+                str(art),
+                "--checkpoint-every",
+                "1",
+                "--keep-checkpoint",
+            ]
+        )
+        == 0
+    )
     (killed,) = [d.name for d in art.iterdir() if d.name != finished]
     for name in (MANIFEST, "model.pt", REPORT):  # as if killed after the last checkpoint
         (art / killed / name).unlink()
@@ -608,8 +683,18 @@ def live(artifacts, tmp_path) -> tuple[Path, str]:
     (art / run_id).mkdir()
     shutil.copy(art / _finished_run_id(art) / SPEC, art / run_id / SPEC)
     now = time.time()
-    save_progress(store, Progress(run_id=run_id, state="running", epoch=1, epochs=1, started=now - 30,
-                                  updated=now, history=[{"val/loss": 0.7}]))  # the smoke spec has 1 epoch
+    save_progress(
+        store,
+        Progress(
+            run_id=run_id,
+            state="running",
+            epoch=1,
+            epochs=1,
+            started=now - 30,
+            updated=now,
+            history=[{"val/loss": 0.7}],
+        ),
+    )  # the smoke spec has 1 epoch
     return art, run_id
 
 
@@ -759,8 +844,9 @@ def test_cli_ui_rayjobs_go_through_kubectl(artifacts, monkeypatch):
         return R()
 
     monkeypatch.setattr(subprocess, "run", fake_run)
-    args = build_parser().parse_args(["ui", "--artifacts", str(artifacts), "--namespace", "ml",
-                                      "--kubectl", "kubectl --context lab"])
+    args = build_parser().parse_args(
+        ["ui", "--artifacts", str(artifacts), "--namespace", "ml", "--kubectl", "kubectl --context lab"]
+    )
     actions = _ui_actions(args, LocalArtifactStore(artifacts))
     assert actions.rayjobs() == [] and actions.rayjob_logs("j1") == "log\n"
     assert calls == [

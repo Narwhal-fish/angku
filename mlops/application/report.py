@@ -119,12 +119,14 @@ def final_metric_rows(history: list[dict[str, float]]) -> list[tuple[str, str, s
             continue
         lo = min(series, key=lambda p: p[1])
         hi = max(series, key=lambda p: p[1])
-        rows.append((
-            k,
-            format_number(history[-1].get(k)),
-            f"{format_number(lo[1])} (epoch {lo[0]})",
-            f"{format_number(hi[1])} (epoch {hi[0]})",
-        ))
+        rows.append(
+            (
+                k,
+                format_number(history[-1].get(k)),
+                f"{format_number(lo[1])} (epoch {lo[0]})",
+                f"{format_number(hi[1])} (epoch {hi[0]})",
+            )
+        )
     return rows
 
 
@@ -138,8 +140,10 @@ def _curves(b: Bundle) -> str:
     for k in names:
         values = [e[k] for e in history if k in e and not math.isnan(e[k])]
         if values:
-            sparks.append(f"    {k:<{max(map(len, names))}}  {sparkline(values)}  "
-                          f"{format_number(values[0])} → {format_number(values[-1])}")
+            sparks.append(
+                f"    {k:<{max(map(len, names))}}  {sparkline(values)}  "
+                f"{format_number(values[0])} → {format_number(values[-1])}"
+            )
     rows = [(str(i), *(format_number(e.get(k)) for k in names)) for i, e in enumerate(history, start=1)]
     return out + "\n".join(sparks) + "\n\n" + _table(("epoch", *names), rows)
 

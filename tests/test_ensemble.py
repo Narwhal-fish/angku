@@ -4,7 +4,6 @@ same cases (roadmap 15, phase 3 of the split/predict/ensemble plan)."""
 from __future__ import annotations
 
 import json
-import math
 from pathlib import Path
 
 import pytest
@@ -99,7 +98,9 @@ def test_soft_ensemble_records_members_and_their_own_numbers(three):
     assert [m.run_id for m in rec.members] == sorted(ids)
     assert set(rec.metrics) == {"loss", "dice/0", "dice/1", "dice/mean"}
     for run_id in ids:  # each member's own numbers are exactly what `predict` says for it
-        assert rec.member_metrics[run_id] == predict_run(store, run_id, data=_data(), out=InMemoryArtifactStore()).metrics
+        assert (
+            rec.member_metrics[run_id] == predict_run(store, run_id, data=_data(), out=InMemoryArtifactStore()).metrics
+        )
     assert load_result(store, rec.result_id) == rec
 
 
