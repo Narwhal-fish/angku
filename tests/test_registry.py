@@ -95,6 +95,17 @@ def test_tiny_cnn_param_typo_rejected():
         MODELS.build("tiny_cnn", {"in_channels": 1, "out_channels": 2, "hiden": 4})
 
 
+def test_tiny_cnn_dropout_is_a_layer_only_when_asked_for():
+    plain = MODELS.build("tiny_cnn", {"in_channels": 1, "out_channels": 2})
+    assert not any(isinstance(m, torch.nn.Dropout) for m in plain.modules())
+    assert list(plain.state_dict()) == ["0.weight", "0.bias", "2.weight", "2.bias"]  # unchanged
+    model = MODELS.build("tiny_cnn", {"in_channels": 1, "out_channels": 2, "dropout": 0.3})
+    assert [m.p for m in model.modules() if isinstance(m, torch.nn.Dropout)] == [0.3]
+    assert model(torch.zeros(1, 1, 4, 4, 4)).shape == (1, 2, 4, 4, 4)
+    with pytest.raises(RegistryError, match="dropout"):
+        MODELS.build("tiny_cnn", {"in_channels": 1, "out_channels": 2, "dropout": 1.0})
+
+
 # --- SwinUNETR: only runs when the `medical` extra is installed ---
 
 

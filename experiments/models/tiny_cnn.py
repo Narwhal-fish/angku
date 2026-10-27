@@ -18,13 +18,16 @@ class TinyCNNParams(Params):
     out_channels: int = Field(gt=0)
     hidden: int = Field(default=8, gt=0)
     spatial_dims: int = Field(default=3, ge=1, le=3)
+    # Element-wise dropout after the hidden activation. 0 (default) adds no layer at all, so the
+    # state_dict keys and existing runs are unchanged; > 0 is what `mlops predict --mc-samples` needs.
+    dropout: float = Field(default=0.0, ge=0.0, lt=1.0)
 
 
 @MODELS.register("tiny_cnn", params=TinyCNNParams)
 def build_tiny_cnn(p: TinyCNNParams) -> nn.Module:
     conv = {1: nn.Conv1d, 2: nn.Conv2d, 3: nn.Conv3d}[p.spatial_dims]
-    return nn.Sequential(
-        conv(p.in_channels, p.hidden, kernel_size=3, padding=1),
-        nn.ReLU(),
-        conv(p.hidden, p.out_channels, kernel_size=1),
-    )
+    layers: list[nn.Module] = [conv(p.in_channels, p.hidden, kernel_size=3, padding=1), nn.ReLU()]
+    if p.dropout > 0:
+        layers.append(nn.Dropout(p.dropout))
+    layers.append(conv(p.hidden, p.out_channels, kernel_size=1))
+    return nn.Sequential(*layers)

@@ -12,6 +12,13 @@ listed as a run):
     <result_id>/result.json          PredictionRecord
     <result_id>/report.md            derived from result.json
     <result_id>/predictions/<case>.pt   argmax labels (uint8), only with save_predictions
+    <result_id>/uncertainty/<case>.pt   {"entropy", "variance"} maps (float32), MC dropout + save_predictions
+
+MC dropout (``mc_samples``): the model stays in eval mode except its dropout layers, each case is
+predicted ``mc_samples`` times with torch seeded to ``mc_seed + case index`` (so a case's samples
+do not depend on the cases before it), the prediction is the mean softmax (like a soft vote) and
+the per-case uncertainty is the voxel mean of the predictive entropy and of the variance of the
+probabilities across samples.
 """
 
 from __future__ import annotations
@@ -55,6 +62,7 @@ from mlops.registry import INFERERS, LOSSES, METRICS, MODELS
 RESULT = "result.json"
 REPORT = "report.md"
 PREDICTIONS = "predictions"
+UNCERTAINTY = "uncertainty"
 
 VAL_NOTE = ("val was seen during training (val/loss every epoch, keep-best chose its epoch on it): "
             "these numbers are optimistic; use a test split for an unbiased estimate")
@@ -75,11 +83,19 @@ def predict_run(
     probe: EnvironmentProbe | None = None,
     save_predictions: bool = False,
     out: ArtifactStore | None = None,
+    mc_samples: int | None = None,
+    mc_seed: int = 0,
 ) -> PredictionRecord:
     """Evaluate ``run_id``'s model on ``part`` and write the result into ``out`` (default: ``store``).
-    ``weights`` None = ``best.pt`` when the run kept one, else ``model.pt``."""
+    ``weights`` None = ``best.pt`` when the run kept one, else ``model.pt``. ``mc_samples`` = MC
+    dropout with that many forward passes per case (the model must have dropout)."""
+    mc = None
+    if mc_samples is not None:
+        if mc_samples < 2:
+            raise PredictError(f"MC dropout needs at least 2 samples per case, got {mc_samples}")
+        mc = {"samples": mc_samples, "seed": mc_seed}
     return _predict(store, [run_id], kind="predict", vote=None, data=data, part=part, weights=weights,
-                    device=device, probe=probe, save_predictions=save_predictions, out=out)
+                    device=device, probe=probe, save_predictions=save_predictions, out=out, mc=mc)
 
 
 def ensemble_runs(
@@ -156,6 +172,7 @@ def _predict(
     probe: EnvironmentProbe | None,
     save_predictions: bool,
     out: ArtifactStore | None,
+    mc: dict[str, int] | None = None,
 ) -> PredictionRecord:
     if not run_ids:
         raise PredictError("no run to predict with")
@@ -181,6 +198,11 @@ def _predict(
         model: nn.Module = MODELS.build(m.bundle.spec.model.name, m.bundle.spec.model.params)
         model.load_state_dict(m.state)
         models.append(model.to(dev).eval())
+    if mc is not None and enable_dropout(models[0]) == 0:
+        raise PredictError(
+            f"run {members[0].member.run_id[:12]}'s model has no dropout (p > 0): MC dropout would give "
+            "the same prediction every sample; train with dropout (e.g. tiny_cnn `dropout: 0.2`)"
+        )
     loss_fn = LOSSES.build(spec.loss.name, spec.loss.params)
     if isinstance(loss_fn, nn.Module):
         loss_fn = loss_fn.to(dev)
@@ -191,6 +213,8 @@ def _predict(
 
     target = out if out is not None else store
     method: dict[str, Any] = {"vote": vote} if vote is not None else {}
+    if mc is not None:
+        method["mc_dropout"] = mc
     result_id = compute_result_id(kind=kind, members=[m.member for m in members], part=part,
                                   dataset_snapshot=spec.dataset.snapshot, method=method)
     rows: list[CaseResult] = []
@@ -198,9 +222,20 @@ def _predict(
     for i, case in enumerate(cases):
         x, y = dataset[i]
         x, y = x.unsqueeze(0).to(dev), y.unsqueeze(0).to(dev)
-        logits = [_logits(model, x, infer) for model in models]
-        combined, with_loss = combine(logits, vote)
-        rows.append(CaseResult(case=case, metrics=_row(combined, y, loss_fn if with_loss else None, metrics)))
+        maps: tuple[Tensor, Tensor] | None = None
+        if mc is not None:
+            torch.manual_seed(mc["seed"] + i)
+            samples = [_logits(models[0], x, infer) for _ in range(mc["samples"])]
+            combined, with_loss = combine(samples, "soft")
+            maps = uncertainty(torch.stack([lg.softmax(dim=1) for lg in samples]))
+            logits = [combined]
+        else:
+            logits = [_logits(model, x, infer) for model in models]
+            combined, with_loss = combine(logits, vote)
+        row = _row(combined, y, loss_fn if with_loss else None, metrics)
+        if maps is not None:
+            row |= {"uncertainty/entropy": float(maps[0].mean()), "uncertainty/variance": float(maps[1].mean())}
+        rows.append(CaseResult(case=case, metrics=row))
         if kind == "ensemble":
             for j, lg in enumerate(logits):
                 member_rows[j].append(CaseResult(case=case, metrics=_row(lg, y, loss_fn, metrics)))
@@ -208,6 +243,10 @@ def _predict(
             buf = io.BytesIO()
             torch.save(combined.argmax(dim=1)[0].to(torch.uint8).cpu(), buf)
             target.put(result_id, f"{PREDICTIONS}/{case}.pt", buf.getvalue())
+            if maps is not None:
+                buf = io.BytesIO()
+                torch.save({"entropy": maps[0][0].float().cpu(), "variance": maps[1][0].float().cpu()}, buf)
+                target.put(result_id, f"{UNCERTAINTY}/{case}.pt", buf.getvalue())
 
     record = PredictionRecord(
         result_id=result_id, kind=kind, name=spec.meta.name, members=[m.member for m in members], part=part,
@@ -238,6 +277,27 @@ def combine(logits: Sequence[Tensor], vote: Vote | None) -> tuple[Tensor, bool]:
     # votes differ by >= 1 where they differ; 2 * votes + prob (< 1) lets the probability decide only ties.
     winner = (2 * votes.to(probs.dtype) + probs).argmax(dim=1)
     return torch.nn.functional.one_hot(winner, classes).movedim(-1, 1).to(probs.dtype), False
+
+
+def enable_dropout(model: nn.Module) -> int:
+    """Put only the dropout layers in train mode (BatchNorm & co. stay in eval); returns how many
+    of them actually drop something (p > 0)."""
+    active = 0
+    for m in model.modules():
+        if isinstance(m, nn.modules.dropout._DropoutNd):
+            m.train()
+            active += m.p > 0
+    return active
+
+
+@torch.no_grad()
+def uncertainty(probs: Tensor) -> tuple[Tensor, Tensor]:
+    """``probs`` (samples, N, C, *spatial) -> per-voxel (N, *spatial): predictive entropy of the
+    mean probabilities (nats) and the variance across samples (population), averaged over classes."""
+    mean = probs.mean(dim=0)
+    entropy = -(mean * mean.clamp_min(1e-12).log()).sum(dim=1)
+    variance = probs.var(dim=0, correction=0).mean(dim=1)
+    return entropy, variance
 
 
 def _part(bundle: Bundle, data: DataProvider, part: Part) -> tuple[list[str], Any]:
@@ -329,6 +389,8 @@ def _members_line(r: PredictionRecord) -> str:
 def _what(r: PredictionRecord) -> str:
     if r.kind == "ensemble":
         return f"ensemble ({r.method.get('vote')} vote)"
+    if "mc_dropout" in r.method:
+        return f"predict with MC dropout ({r.method['mc_dropout']['samples']} samples)"
     return r.kind
 
 
@@ -343,6 +405,9 @@ def prediction_lines(r: PredictionRecord) -> list[str]:
         head = f"{r.name}: {_what(r)} of {len(r.members)} runs on {r.part} ({n})"
     else:
         head = f"{r.name}: predicted {r.part} ({n})"
+        if "mc_dropout" in r.method:
+            mc = r.method["mc_dropout"]
+            head += f" with MC dropout ({mc['samples']} samples, seed {mc['seed']})"
     out = [head, f"  result_id  {r.result_id}", f"  run{'s' if len(r.members) > 1 else ' '}       {_members_line(r)}",
            f"  {_metric_cells(r.metrics)}"]
     if r.member_metrics:
@@ -371,10 +436,17 @@ def render_prediction_report(r: PredictionRecord) -> str:
         f"| data | {r.dataset}: {r.data_snapshot.status} ({r.data_snapshot.detail or 'matches the pin'}) |",
         f"| device | `{r.device}` |",
     ]
+    if "mc_dropout" in r.method:
+        mc = r.method["mc_dropout"]
+        lines.append(f"| method | MC dropout: {mc['samples']} samples per case, seed {mc['seed']} + case index |")
     for n in r.notes:
         lines += ["", f"> {n}"]
     lines += ["", "## Mean over cases", "", "| metric | mean |", "|---|---|"]
     lines += [f"| {k} | {_cell(r.metrics[k])} |" for k in keys]
+    if "mc_dropout" in r.method:
+        lines += ["", "`uncertainty/entropy`: predictive entropy of the mean probabilities (nats), "
+                      "`uncertainty/variance`: variance of the probabilities across samples; both are "
+                      "voxel means per case. Metrics and loss are of the mean probabilities."]
     if r.member_metrics:
         member_keys = list(next(iter(r.member_metrics.values())))
         lines += ["", "## Each run alone", "", "Same cases, each run's own prediction: did the vote help?", "",

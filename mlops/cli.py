@@ -486,7 +486,7 @@ def cmd_predict(args: argparse.Namespace) -> int:
     try:
         record = predict_run(
             store, args.run_id, data=data, part=args.part, weights=args.weights, device=args.device,
-            probe=_probe(), save_predictions=args.save_predictions,
+            probe=_probe(), save_predictions=args.save_predictions, mc_samples=args.mc_samples, mc_seed=args.mc_seed,
         )
     except (PredictError, ArtifactError, DataError, RegistryError, RunnerError) as e:
         raise CliError(str(e)) from e
@@ -807,7 +807,12 @@ def build_parser() -> argparse.ArgumentParser:
                     help="which cases (default test; val was seen during training, so its numbers are optimistic)")
     pr.add_argument("--weights", choices=["best.pt", "model.pt"],
                     help="default: best.pt when the run kept one, else model.pt")
-    pr.add_argument("--save-predictions", action="store_true", help="also store each case's predicted labels")
+    pr.add_argument("--save-predictions", action="store_true",
+                    help="also store each case's predicted labels (and uncertainty maps with --mc-samples)")
+    pr.add_argument("--mc-samples", type=int, metavar="N",
+                    help="MC dropout: N forward passes per case with dropout on; adds uncertainty/entropy and "
+                         "uncertainty/variance (the model must have dropout)")
+    pr.add_argument("--mc-seed", type=int, default=0, help="MC dropout seed; case i uses seed + i (default 0)")
     _add_data_root(pr)
     pr.add_argument("--device", help="torch device override, e.g. cpu")
     pr.add_argument("--experiments", default="experiments", help="package to discover components from")

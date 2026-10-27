@@ -201,6 +201,19 @@ metrics and test cases); the models themselves may differ. The output shows the 
 next to each model on its own, so you can see whether combining helped. The k folds of a k-fold
 experiment make a natural ensemble: they share the same test cases.
 
+### How sure is the model?
+
+```bash
+mlops predict <run_id> --artifacts runs --mc-samples 20
+```
+
+For a model trained with dropout (for example `dropout: 0.2` in the `tiny_cnn` params), this
+predicts every case 20 times with dropout switched on and averages the results. Besides the usual
+metrics you get `uncertainty/entropy` and `uncertainty/variance` per case: the higher they are,
+the less the samples agreed, so cases with high values are the ones worth a second look.
+With `--save-predictions` a voxel-by-voxel uncertainty map is stored for each case as well. The
+samples are seeded (`--mc-seed`, default 0), so the same command gives the same numbers again.
+
 ## Commands
 
 | Command | What it does |
