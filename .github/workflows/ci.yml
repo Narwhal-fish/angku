@@ -1,10 +1,8 @@
-# Tests on every push to master and every pull request. CPU only: the GPU, real-data and
-# real-cluster checks are tracked in GitHub issues.
+# Tests on every pull request (features land on master only through PRs). CPU only: the GPU,
+# real-data and real-cluster checks are tracked in GitHub issues.
 name: ci
 
 on:
-  push:
-    branches: [master]
   pull_request:
 
 concurrency:
