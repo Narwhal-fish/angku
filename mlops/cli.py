@@ -21,11 +21,14 @@ concrete adapters (tracker, data provider, artifact store) and hands them to
     mlops diff   RUN_A RUN_B --artifacts DIR [--artifacts-b DIR] [--atol X] [--json]
     mlops list   --artifacts DIR [--experiment ID_PREFIX] [--atol X] [--json]
     mlops snapshot experiment.yaml [--data-root DIR]
+    mlops gc     --artifacts DIR [--experiment ID_PREFIX] [--resumable] [--keep-attempts N]
+                                 [--ray-storage [--ray-storage-mount DIR]] [--apply] [--json]
     mlops ui     --artifacts DIR [--experiment ID_PREFIX] [--refresh SECONDS] [--data-root DIR]
                                  [--tracker mlflow|inmemory] [--mlflow-uri URI] [--device cpu]
                                  [--ray-address ADDR] [--atol X] [--namespace NS] [--kubectl CMD]
 
-Exit codes: 0 ok, 1 training failed / bundle not reproduced / diff: different experiments,
+Exit codes: 0 ok, 1 training failed / bundle not reproduced / diff: different experiments /
+gc: a run changed since the plan and was skipped,
 2 bad input (yaml, pins, wiring).
 
 Environment: every run records what it actually ran on (code vs code.commit, image digest,
@@ -67,10 +70,12 @@ from mlops.adapters.kuberay import (
 from mlops.adapters.live_progress import LiveProgress
 from mlops.adapters.local_artifacts import LocalArtifactStore
 from mlops.adapters.local_environment import LocalEnvironmentProbe
+from mlops.adapters.ray_storage import LocalRayStorage
 from mlops.adapters.synthetic_data import SyntheticBlobs
 from mlops.application import RunnerError
 from mlops.application.bundle import LAUNCH, MANIFEST, SPEC, load_bundle, load_checkpoint, load_launch
 from mlops.application.diff import RunDiff, diff_lines, diff_runs, format_value
+from mlops.application.gc import GcError, GcItem, GcPolicy, apply_gc, gc_lines, plan_gc
 from mlops.application.launch import Launcher, LocalLauncher
 from mlops.application.listing import ExperimentGroup, group_by_experiment, list_runs
 from mlops.application.predict import (
@@ -693,6 +698,41 @@ def cmd_list(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_gc(args: argparse.Namespace) -> int:
+    root = Path(args.artifacts)
+    if not root.is_dir():
+        raise CliError(f"no such directory: {args.artifacts}")
+    store = LocalArtifactStore(root)
+    ray = LocalRayStorage(args.ray_storage_mount) if args.ray_storage or args.ray_storage_mount else None
+    policy = GcPolicy(resumable=args.resumable, keep_attempts=args.keep_attempts, experiment=args.experiment)
+    try:
+        plan = plan_gc(store, policy, ray_storage=ray)
+    except GcError as e:
+        raise CliError(str(e)) from e
+    sizes = {i.run_id: _gc_size(root, i, ray) for i in plan.delete}  # measured before anything goes
+    outcome = apply_gc(store, plan, ray_storage=ray) if args.apply else None
+    if args.json:
+        out: dict[str, Any] = {"applied": args.apply, "plan": plan.to_dict(), "bytes": sizes}
+        if outcome is not None:
+            out["outcome"] = outcome.to_dict()
+        print(json.dumps(out, indent=2))
+    else:
+        print("\n".join(gc_lines(plan, sizes=sizes, outcome=outcome)))
+    return 1 if outcome is not None and outcome.skipped else 0
+
+
+def _gc_size(root: Path, item: GcItem, ray: LocalRayStorage | None) -> int | None:
+    run_dir = root / item.run_id
+    files = [p for p in run_dir.rglob("*") if p.is_file()] if item.whole_run else [run_dir / f for f in item.files]
+    total = sum(p.stat().st_size for p in files if p.is_file())
+    if item.ray_dir is not None and ray is not None:
+        ray_size = ray.size(item.ray_dir.storage_path, item.ray_dir.name)
+        if ray_size is None:
+            return None
+        total += ray_size
+    return total
+
+
 def _print_group(g: ExperimentGroup) -> None:
     if g.metrics_agree is None:
         verdict = f"{g.finished} finished"
@@ -1080,6 +1120,34 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ls.add_argument("--json", action="store_true", help="machine-readable listing on stdout")
     ls.set_defaults(func=cmd_list)
+
+    gc = sub.add_parser(
+        "gc",
+        help="clean up an artifact root: FAILED / INCOMPLETE runs, leftover checkpoints, old attempts "
+        "(dry run unless --apply)",
+    )
+    gc.add_argument("--artifacts", metavar="DIR", required=True, help="artifact root to clean")
+    gc.add_argument("--experiment", metavar="ID", help="only this ExperimentID (a prefix is enough)")
+    gc.add_argument("--resumable", action="store_true", help="also delete runs that could still be resumed")
+    gc.add_argument(
+        "--keep-attempts",
+        type=int,
+        metavar="N",
+        help="keep only the newest N FINISHED attempts of each experiment (runs used by a result always stay)",
+    )
+    gc.add_argument(
+        "--ray-storage",
+        action="store_true",
+        help="also delete the Ray checkpoints (launch.json's storage path) of the runs gc removes",
+    )
+    gc.add_argument(
+        "--ray-storage-mount",
+        metavar="DIR",
+        help="where that Ray storage is mounted on this machine, e.g. .kind/ray-storage (implies --ray-storage)",
+    )
+    gc.add_argument("--apply", action="store_true", help="actually delete (default: only print the plan)")
+    gc.add_argument("--json", action="store_true", help="machine-readable plan (and outcome) on stdout")
+    gc.set_defaults(func=cmd_gc)
 
     sn = sub.add_parser(
         "snapshot", help="print the content hash of the data a spec would load, to pin as dataset.snapshot"

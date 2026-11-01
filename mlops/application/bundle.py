@@ -191,6 +191,11 @@ class LaunchRecord:
     keep_best: str | None = None  # BestCriterion as text; a resume continues with it
 
 
+def ray_run_name(run_id: str, attempt: int) -> str:
+    """Ray Train's run name for an attempt: its checkpoints live under ``storage_path/<this>``."""
+    return f"mlops-{run_id[:12]}-a{attempt}"
+
+
 def save_launch(store: ArtifactStore, run_id: str, launch: LaunchRecord) -> None:
     store.put(run_id, LAUNCH, json.dumps(asdict(launch), indent=2).encode())
 

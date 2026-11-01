@@ -28,7 +28,7 @@ from mlops.domain.best import BestRecord
 from mlops.domain.experiment import ExperimentSpec
 from mlops.domain.identity import compute_experiment_id
 from mlops.domain.manifest import RunManifest
-from mlops.ports.artifacts import ArtifactStore
+from mlops.ports.artifacts import ArtifactError, ArtifactStore
 
 
 @dataclass(frozen=True)
@@ -125,6 +125,16 @@ def list_runs(store: ArtifactStore, *, experiment: str | None = None, now: float
         if experiment is None or s.experiment_id.startswith(experiment):
             out.append(s)
     return sorted(out, key=lambda r: (r.name, r.experiment_id, r.attempt or 0, r.run_id))
+
+
+def summarise_run(store: ArtifactStore, run_id: str, *, now: float | None = None) -> RunSummary | None:
+    """The ``list_runs`` summary of one run; None when ``run_id`` is not a run (gone, or no spec.json)."""
+    now = time.time() if now is None else now
+    try:
+        files = store.list(run_id)
+    except ArtifactError:
+        return None
+    return _summarise(store, run_id, files, now) if SPEC in files else None
 
 
 def group_by_experiment(runs: list[RunSummary], *, atol: float = 0.0) -> list[ExperimentGroup]:

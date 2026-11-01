@@ -46,6 +46,7 @@ from mlops.application.bundle import (
     LaunchRecord,
     TrainState,
     load_launch,
+    ray_run_name,
     save_bundle,
     save_launch,
     save_spec,
@@ -283,7 +284,7 @@ class RayLauncher:
         if (checkpoint_every or resume) and artifacts is None:
             raise RunnerError("checkpoint_every / resume need an artifact store (spec.json + launch.json go there)")
         storage = str(self.storage_path or Path(tempfile.gettempdir()) / "mlops-ray")
-        name = f"mlops-{run_id[:12]}-a{attempt}"
+        name = ray_run_name(run_id, attempt)
         if resume:
             assert artifacts is not None
             _refuse_if_finished(artifacts, run_id)

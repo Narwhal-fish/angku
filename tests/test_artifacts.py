@@ -244,3 +244,15 @@ def test_delete_removes_one_artifact_and_is_idempotent(store):
     store.delete("never-written", "a.bin")
     with pytest.raises(ArtifactError):
         store.delete("r1", "../escape")
+
+
+def test_local_delete_prunes_only_directories_it_emptied(tmp_path):
+    store = LocalArtifactStore(tmp_path)
+    store.put("r", "a/b/c.txt", b"1")
+    store.put("r", "keep.txt", b"2")
+    store.delete("r", "a/b/c.txt")
+    assert not (tmp_path / "r" / "a").exists()  # emptied subdirectories go
+    assert store.list("r") == ["keep.txt"]  # the run itself stays while it holds files
+    store.delete("r", "keep.txt")
+    assert not (tmp_path / "r").exists() and store.runs() == []
+    store.delete("r", "keep.txt")  # still idempotent

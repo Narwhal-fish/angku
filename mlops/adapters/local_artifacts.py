@@ -39,7 +39,18 @@ class LocalArtifactStore:
         return sorted(p.relative_to(run_dir).as_posix() for p in run_dir.rglob("*") if p.is_file())
 
     def delete(self, run_id: str, name: str) -> None:
-        self._path(run_id, name).unlink(missing_ok=True)
+        path = self._path(run_id, name)
+        path.unlink(missing_ok=True)
+        # Prune directories the delete left empty, up to and including the run's own, so
+        # deleting every file of a run leaves nothing behind (``runs()`` skips empty dirs anyway).
+        run_dir = self.root / run_id
+        d = path.parent
+        while d == run_dir or run_dir in d.parents:
+            try:
+                d.rmdir()  # only succeeds when empty
+            except OSError:
+                break
+            d = d.parent
 
     def runs(self) -> list[str]:
         if not self.root.is_dir():
