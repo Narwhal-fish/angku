@@ -27,7 +27,7 @@ import torch
 from mlops.domain.best import BestCriterion
 from mlops.domain.environment import EnvironmentRecord
 from mlops.domain.experiment import ExperimentSpec
-from mlops.domain.manifest import ResumePoint, RunManifest
+from mlops.domain.manifest import ResumePoint, RunManifest, parse_manifest
 from mlops.domain.split import SplitAssignment
 from mlops.ports.artifacts import ArtifactStore
 
@@ -74,7 +74,7 @@ def save_bundle(
 
 def load_bundle(store: ArtifactStore, run_id: str) -> Bundle:
     spec = ExperimentSpec.model_validate_json(store.get(run_id, SPEC))
-    manifest = RunManifest.model_validate_json(store.get(run_id, MANIFEST))
+    manifest = parse_manifest(store.get(run_id, MANIFEST))
     names = store.list(run_id)
 
     def weights(name: str) -> dict[str, Any] | None:

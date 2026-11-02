@@ -64,7 +64,7 @@ from mlops.domain.best import BestCriterion, best_record
 from mlops.domain.environment import EnvCheck, EnvironmentRecord, record_environment
 from mlops.domain.experiment import ExperimentSpec
 from mlops.domain.identity import compute_experiment_id, compute_run_id
-from mlops.domain.manifest import ResumePoint, RunManifest
+from mlops.domain.manifest import FORMAT_VERSION, ResumePoint, RunManifest, parse_manifest
 from mlops.ports.artifacts import ArtifactError, ArtifactStore
 from mlops.ports.data import DataProvider
 from mlops.ports.environment import EnvironmentProbe
@@ -363,6 +363,7 @@ class RayLauncher:
 
         def _manifest(status: RunStatus) -> RunManifest:
             return RunManifest(
+                format_version=FORMAT_VERSION,
                 experiment_id=experiment_id,
                 run_id=run_id,
                 attempt=attempt,
@@ -444,7 +445,7 @@ class RayLauncher:
 
 def _refuse_if_finished(store: ArtifactStore, run_id: str) -> None:
     try:
-        status = RunManifest.model_validate_json(store.get(run_id, MANIFEST)).status
+        status = parse_manifest(store.get(run_id, MANIFEST)).status
     except ArtifactError:
         return
     if status == "FINISHED":

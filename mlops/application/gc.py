@@ -39,7 +39,7 @@ from mlops.application.bundle import CHECKPOINT, LAUNCH, MANIFEST, SPEC, load_la
 from mlops.application.listing import RunSummary, list_runs, summarise_run
 from mlops.application.predict import RESULT
 from mlops.application.progress import PROGRESS, is_live, read_progress
-from mlops.domain.prediction import PredictionRecord
+from mlops.domain.prediction import parse_result
 from mlops.ports.artifacts import ArtifactError, ArtifactStore
 from mlops.ports.ray_storage import RayStorage
 
@@ -122,12 +122,15 @@ def plan_gc(
         raise GcError(f"keep_attempts must be >= 1, got {policy.keep_attempts}")
     now = time.time() if now is None else now
     warnings: list[str] = []
-    used_by = _result_members(store, warnings)
+    used_by, blind = _result_members(store, warnings)
     delete: list[GcItem] = []
     kept: list[GcItem] = []
     runs = list_runs(store, experiment=policy.experiment, now=now)
 
     def whole(s: RunSummary, reason: str) -> None:
+        if blind:
+            kept.append(_item(s, f"{reason}; kept: a result.json is unreadable"))
+            return
         if s.run_id in used_by:
             kept.append(_item(s, f"used by result {used_by[s.run_id][:12]}"))
             return
@@ -169,7 +172,7 @@ def apply_gc(
 ) -> GcOutcome:
     """Delete what ``plan`` says, re-checking each run first; a run whose status or
     resumability changed since the plan, or that a result now uses, is skipped."""
-    used_by = _result_members(store, [])
+    used_by, blind = _result_members(store, [])
     deleted: list[GcItem] = []
     skipped: list[tuple[GcItem, str]] = []
     for item in plan.delete:
@@ -183,6 +186,9 @@ def apply_gc(
             continue
         if (s.status, s.resumable) != (item.status, item.resumable):
             skipped.append((item, f"now {s.status}" + (" (resumable)" if s.resumable else "")))
+            continue
+        if item.whole_run and blind:
+            skipped.append((item, "a result.json is now unreadable"))
             continue
         if item.whole_run and item.run_id in used_by:
             skipped.append((item, f"now used by result {used_by[item.run_id][:12]}"))
@@ -227,20 +233,23 @@ def _deletion_order(files: list[str]) -> tuple[str, ...]:
     return (*first, *manifest, *rest, *last)
 
 
-def _result_members(store: ArtifactStore, warnings: list[str]) -> dict[str, str]:
-    """{run_id: result_id} of every run some result.json lists as a member."""
+def _result_members(store: ArtifactStore, warnings: list[str]) -> tuple[dict[str, str], bool]:
+    """{run_id: result_id} of every run some result.json lists as a member, and whether any
+    result.json was unreadable."""
     out: dict[str, str] = {}
+    blind = False
     for rid in store.runs():
         try:
             if RESULT not in store.list(rid):
                 continue
-            record = PredictionRecord.model_validate_json(store.get(rid, RESULT))
+            record = parse_result(store.get(rid, RESULT))
         except (ArtifactError, ValueError) as e:
-            warnings.append(f"result {rid[:12]} is unreadable ({str(e).splitlines()[0]}): its runs are not protected")
+            warnings.append(f"result {rid[:12]} is unreadable ({str(e).splitlines()[0]}): no run is deleted")
+            blind = True
             continue
         for m in record.members:
             out.setdefault(m.run_id, rid)
-    return out
+    return out, blind
 
 
 def _old_attempts(runs: list[RunSummary], keep: int, used_by: dict[str, str], kept: list[GcItem]) -> set[str]:

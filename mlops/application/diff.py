@@ -31,7 +31,7 @@ from typing import Any
 from mlops.application.bundle import MANIFEST, SPEC, SPLIT
 from mlops.domain.experiment import ExperimentSpec
 from mlops.domain.identity import compute_experiment_id
-from mlops.domain.manifest import RunManifest
+from mlops.domain.manifest import RunManifest, parse_manifest
 from mlops.domain.split import SplitAssignment
 from mlops.ports.artifacts import ArtifactError, ArtifactStore
 
@@ -204,7 +204,7 @@ def diff_runs(store_a: ArtifactStore, run_a: str, store_b: ArtifactStore, run_b:
 def _read(store: ArtifactStore, run_id: str) -> tuple[ExperimentSpec, RunManifest | None]:
     spec = ExperimentSpec.model_validate_json(store.get(run_id, SPEC))
     try:
-        manifest = RunManifest.model_validate_json(store.get(run_id, MANIFEST))
+        manifest = parse_manifest(store.get(run_id, MANIFEST))
     except ArtifactError:  # killed before any manifest was written
         manifest = None
     return spec, manifest

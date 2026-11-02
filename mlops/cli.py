@@ -97,7 +97,14 @@ from mlops.application.reproduce import (
 )
 from mlops.application.runner import RunResult, verify_data
 from mlops.config import ConfigError, load_experiment_yaml
-from mlops.domain import ExperimentSpec, RunManifest, UnpinnedInputError, compute_experiment_id, compute_run_id
+from mlops.domain import (
+    BundleFormatError,
+    ExperimentSpec,
+    UnpinnedInputError,
+    compute_experiment_id,
+    compute_run_id,
+    parse_manifest,
+)
 from mlops.domain.best import BestCriterion
 from mlops.domain.environment import EnvCheck, record_environment
 from mlops.ports.artifacts import ArtifactError
@@ -337,7 +344,7 @@ def _resume_target(
     except ArtifactError as e:
         raise CliError(str(e)) from e
     try:
-        finished = RunManifest.model_validate_json(store.get(run_id, MANIFEST)).status == "FINISHED"
+        finished = parse_manifest(store.get(run_id, MANIFEST)).status == "FINISHED"
     except ArtifactError:
         finished = False
     if finished:  # checked first: a finished run has usually dropped its checkpoint
@@ -527,7 +534,7 @@ def _reproduce(
     `mlops reproduce` and `mlops ui`; bad input -> CliError, a replay that blows up propagates."""
     try:
         spec = ExperimentSpec.model_validate_json(store.get(run_id, SPEC))
-        manifest = RunManifest.model_validate_json(store.get(run_id, MANIFEST))
+        manifest = parse_manifest(store.get(run_id, MANIFEST))
     except ArtifactError as e:
         raise CliError(str(e)) from e
     _discover(args.experiments)
@@ -560,7 +567,7 @@ def _reproduce(
 def cmd_reproduce(args: argparse.Namespace) -> int:
     try:
         spec, report = _reproduce(LocalArtifactStore(args.artifacts), args.run_id, args)
-    except CliError:
+    except (CliError, BundleFormatError):
         raise
     except Exception as e:  # the replay itself blew up: environment, not evidence
         print(f"replay FAILED: {type(e).__name__}: {e}", file=sys.stderr)
@@ -1189,7 +1196,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         return args.func(args)
-    except CliError as e:
+    except (CliError, BundleFormatError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
 

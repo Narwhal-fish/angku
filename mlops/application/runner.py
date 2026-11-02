@@ -45,7 +45,7 @@ from mlops.domain.best import BestCriterion, best_epoch, best_record
 from mlops.domain.environment import EnvCheck, EnvironmentRecord, check_snapshot, record_environment
 from mlops.domain.experiment import ExperimentSpec, Resources, Training
 from mlops.domain.identity import compute_experiment_id, compute_run_id
-from mlops.domain.manifest import ResumePoint, RunManifest
+from mlops.domain.manifest import FORMAT_VERSION, ResumePoint, RunManifest, parse_manifest
 from mlops.domain.split import SplitAssignment, SplitError, assign_split
 from mlops.ports.artifacts import ArtifactError, ArtifactStore
 from mlops.ports.data import DataError, DataProvider, DataSplits, Sample
@@ -519,6 +519,7 @@ def run_experiment(
 
     def _manifest(status: RunStatus) -> RunManifest:
         return RunManifest(
+            format_version=FORMAT_VERSION,
             experiment_id=experiment_id,
             run_id=run_id,
             attempt=attempt,
@@ -625,7 +626,7 @@ def resumed_criterion(requested: BestCriterion | None, stored: BestCriterion | N
 def _resume_point(store: ArtifactStore, run_id: str, experiment_id: str) -> Checkpoint:
     # FINISHED first: a finished run has usually dropped its checkpoint, and that is the reason.
     try:
-        status = RunManifest.model_validate_json(store.get(run_id, MANIFEST)).status
+        status = parse_manifest(store.get(run_id, MANIFEST)).status
     except ArtifactError:  # killed before any manifest was written
         status = None
     if status == "FINISHED":

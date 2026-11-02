@@ -45,6 +45,7 @@ from mlops.application.runner import (
 )
 from mlops.domain.environment import record_environment
 from mlops.domain.prediction import (
+    RESULT_FORMAT_VERSION,
     CaseResult,
     Kind,
     Member,
@@ -53,6 +54,7 @@ from mlops.domain.prediction import (
     Vote,
     Weights,
     compute_result_id,
+    parse_result,
 )
 from mlops.ports.artifacts import ArtifactError, ArtifactStore
 from mlops.ports.data import DataProvider
@@ -279,6 +281,7 @@ def _predict(
                 target.put(result_id, f"{UNCERTAINTY}/{case}.pt", buf.getvalue())
 
     record = PredictionRecord(
+        format_version=RESULT_FORMAT_VERSION,
         result_id=result_id,
         kind=kind,
         name=spec.meta.name,
@@ -402,7 +405,7 @@ def mean_metrics(rows: Sequence[CaseResult]) -> dict[str, float]:
 
 
 def load_result(store: ArtifactStore, result_id: str) -> PredictionRecord:
-    return PredictionRecord.model_validate_json(store.get(result_id, RESULT))
+    return parse_result(store.get(result_id, RESULT))
 
 
 def list_results(store: ArtifactStore) -> list[PredictionRecord]:

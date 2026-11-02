@@ -21,7 +21,7 @@ from mlops.adapters.synthetic_data import SyntheticBlobs  # noqa: E402
 from mlops.application import RunnerError, run_experiment  # noqa: E402
 from mlops.application.bundle import load_bundle  # noqa: E402
 from mlops.config import load_experiment_dict, load_experiment_yaml  # noqa: E402
-from mlops.domain import compute_experiment_id, compute_run_id  # noqa: E402
+from mlops.domain import FORMAT_VERSION, compute_experiment_id, compute_run_id  # noqa: E402
 from mlops.domain.best import BestCriterion, best_record  # noqa: E402
 from mlops.registry import discover  # noqa: E402
 
@@ -72,6 +72,7 @@ def test_one_ray_worker_reproduces_the_local_run(launcher):
     a, b = load_bundle(local_store, local.run_id), load_bundle(ray_store, result.run_id)
     assert b.manifest.status == "FINISHED" and b.manifest.history == local.history
     assert (a.manifest.launcher, b.manifest.launcher) == ("local", "ray")
+    assert a.manifest.format_version == b.manifest.format_version == FORMAT_VERSION
     # Bit-exactness is only promised within one launcher/environment: Ray workers run with
     # OMP_NUM_THREADS=1, so CPU kernels sum in a different order than the local run.
     for k, v in a.model_state.items():
@@ -142,6 +143,7 @@ def test_worker_failure_marks_run_failed_and_keeps_failed_bundle(launcher):
     assert run.status == "FAILED"
     bundle = load_bundle(store, run.run_id)
     assert bundle.manifest.status == "FAILED" and bundle.model_state is None
+    assert bundle.manifest.format_version == FORMAT_VERSION
 
 
 def test_environment_is_captured_on_the_training_worker(launcher):

@@ -1,0 +1,93 @@
+{
+  "result_id": "d39af48c790a636e890ac74651f1ba4411ff1539be48f72606907b53030a8b60",
+  "format_version": 1,
+  "kind": "predict",
+  "name": "tiny-cnn-smoke",
+  "members": [
+    {
+      "run_id": "a9253fa46953f7d0a28bef9350db5aacac74537ddee32917da0f67651c5c1156",
+      "experiment_id": "a78a4e510aa1fe85f284ceebbaa0fa85fe03b97fd0610727ffc4af86e9d20bc2",
+      "weights": "best.pt",
+      "epoch": 1
+    }
+  ],
+  "part": "val",
+  "dataset": "synthetic-blobs",
+  "data_snapshot": {
+    "status": "unknown",
+    "detail": "the data provider does not hash what it serves"
+  },
+  "method": {},
+  "device": "cpu",
+  "cases": [
+    {
+      "case": "case-000",
+      "metrics": {
+        "loss": 0.634621262550354
+      }
+    },
+    {
+      "case": "case-001",
+      "metrics": {
+        "loss": 0.6348140835762024
+      }
+    },
+    {
+      "case": "case-002",
+      "metrics": {
+        "loss": 0.6384645104408264
+      }
+    },
+    {
+      "case": "case-003",
+      "metrics": {
+        "loss": 0.6340065002441406
+      }
+    }
+  ],
+  "metrics": {
+    "loss": 0.6354765892028809
+  },
+  "member_metrics": {},
+  "environment": {
+    "actual": {
+      "python": "3.12.3",
+      "platform": "Linux-x86_64",
+      "packages": {
+        "mlops": "0.0.1",
+        "torch": "2.14.1+cu130",
+        "numpy": "2.5.4",
+        "pydantic": "2.14.2",
+        "monai": "1.6.1",
+        "nibabel": "5.4.2",
+        "einops": "0.8.2",
+        "ray": "2.59.0",
+        "mlflow": "3.17.2"
+      },
+      "cuda": null,
+      "cudnn": null,
+      "gpus": [],
+      "torch_threads": 1,
+      "code": {
+        "source": "git",
+        "head": "72149e29ef27ae2b7cd067fca37ef5c721bd9258",
+        "pinned_found": false,
+        "changed": null
+      },
+      "image_digest": null
+    },
+    "checks": {
+      "code.commit": {
+        "status": "unknown",
+        "detail": "commit 0123456789abcdef0123456789abcdef01234567 is not in this repo (fetch it?)"
+      },
+      "environment.image_digest": {
+        "status": "unknown",
+        "detail": "not running in a known image (MLOPS_IMAGE_DIGEST unset)"
+      }
+    }
+  },
+  "notes": [
+    "val was seen during training (val/loss every epoch, keep-best chose its epoch on it): these numbers are optimistic; use a test split for an unbiased estimate"
+  ]
+}

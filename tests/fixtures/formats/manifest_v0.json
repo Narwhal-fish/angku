@@ -1,0 +1,64 @@
+{
+  "experiment_id": "a78a4e510aa1fe85f284ceebbaa0fa85fe03b97fd0610727ffc4af86e9d20bc2",
+  "run_id": "a9253fa46953f7d0a28bef9350db5aacac74537ddee32917da0f67651c5c1156",
+  "attempt": 1,
+  "status": "FINISHED",
+  "device": "cpu",
+  "launcher": "local",
+  "history": [
+    {
+      "train/loss": 0.6404587924480438,
+      "val/loss": 0.6354765892028809
+    }
+  ],
+  "environment": {
+    "actual": {
+      "python": "3.12.3",
+      "platform": "Linux-x86_64",
+      "packages": {
+        "mlops": "0.0.1",
+        "torch": "2.14.1+cu130",
+        "numpy": "2.5.4",
+        "pydantic": "2.14.2",
+        "monai": "1.6.1",
+        "nibabel": "5.4.2",
+        "einops": "0.8.2",
+        "ray": "2.59.0",
+        "mlflow": "3.17.2"
+      },
+      "cuda": null,
+      "cudnn": null,
+      "gpus": [],
+      "torch_threads": 1,
+      "code": {
+        "source": "git",
+        "head": "63cb24285eb652023df10f160db109738ec78c79",
+        "pinned_found": false,
+        "changed": null
+      },
+      "image_digest": null
+    },
+    "checks": {
+      "code.commit": {
+        "status": "unknown",
+        "detail": "commit 0123456789abcdef0123456789abcdef01234567 is not in this repo (fetch it?)"
+      },
+      "environment.image_digest": {
+        "status": "unknown",
+        "detail": "not running in a known image (MLOPS_IMAGE_DIGEST unset)"
+      }
+    }
+  },
+  "data_snapshot": {
+    "status": "unknown",
+    "detail": "the data provider does not hash what it serves"
+  },
+  "resumes": [],
+  "best": {
+    "metric": "val/loss",
+    "mode": "min",
+    "epoch": 1,
+    "value": 0.6354765892028809
+  },
+  "split": null
+}

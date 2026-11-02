@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import json
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from mlops.domain.best import BestRecord
 from mlops.domain.environment import EnvCheck, EnvironmentRecord
+from mlops.domain.errors import BundleFormatError
+
+FORMAT_VERSION = 1
 
 
 class ResumePoint(BaseModel):
@@ -25,6 +29,7 @@ class RunManifest(BaseModel):
     # write it as null and the bundle would no longer load.
     model_config = ConfigDict(frozen=True, extra="forbid", ser_json_inf_nan="constants")
 
+    format_version: int = Field(default=0, ge=0, strict=True)
     experiment_id: str
     run_id: str
     attempt: int = Field(ge=1)
@@ -48,3 +53,19 @@ class RunManifest(BaseModel):
     # Cases per part ({"train": n, "val": n, "test": n}) when the spec sets `split`; which cases
     # they are is in split.json. None = the provider's own split.
     split: dict[str, int] | None = None
+
+
+def check_format(raw: str | bytes, key: str, known: int, what: str) -> None:
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return
+    if isinstance(data, dict):
+        version = data.get(key, 0)
+        if isinstance(version, int) and not isinstance(version, bool) and version > known:
+            raise BundleFormatError(what, version, known)
+
+
+def parse_manifest(raw: str | bytes) -> RunManifest:
+    check_format(raw, "format_version", FORMAT_VERSION, "manifest.json")
+    return RunManifest.model_validate_json(raw)

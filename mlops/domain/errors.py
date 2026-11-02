@@ -8,3 +8,12 @@ class UnpinnedInputError(DomainError):
     def __init__(self, missing: list[str]) -> None:
         self.missing = missing
         super().__init__("cannot compute ExperimentID: unpinned inputs: " + ", ".join(missing))
+
+
+class BundleFormatError(DomainError, ValueError):
+    def __init__(self, what: str, version: int, known: int) -> None:
+        self.version = version
+        self.known = known
+        super().__init__(
+            f"{what} was written by a newer mlops (format {version}, this one reads up to {known}): upgrade mlops"
+        )

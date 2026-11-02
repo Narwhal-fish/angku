@@ -15,8 +15,9 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from mlops.domain.environment import EnvCheck, EnvironmentRecord
 from mlops.domain.identity import canonical_json
+from mlops.domain.manifest import check_format
 
-RESULT_FORMAT = 1
+RESULT_FORMAT_VERSION = 1
 
 Weights = Literal["model.pt", "best.pt"]
 Part = Literal["val", "test"]
@@ -46,7 +47,7 @@ class CaseResult(_Frozen):
 
 class PredictionRecord(_Frozen):
     result_id: str
-    format: int = RESULT_FORMAT
+    format_version: int = Field(default=0, ge=0, strict=True)
     kind: Kind = "predict"
     name: str  # meta.name of the (first) member's spec, for humans only
     members: list[Member]
@@ -76,3 +77,8 @@ def compute_result_id(
         "method": method,
     }
     return hashlib.sha256(canonical_json(payload).encode("utf-8")).hexdigest()
+
+
+def parse_result(raw: str | bytes) -> PredictionRecord:
+    check_format(raw, "format_version", RESULT_FORMAT_VERSION, "result.json")
+    return PredictionRecord.model_validate_json(raw)

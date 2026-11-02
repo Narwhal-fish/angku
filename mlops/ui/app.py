@@ -35,7 +35,7 @@ from mlops.application.progress import PROGRESS, read_progress
 from mlops.application.report import REPORT, render_report
 from mlops.application.reproduce import ReproduceReport, reproduce_lines
 from mlops.domain.experiment import ExperimentSpec
-from mlops.domain.manifest import RunManifest
+from mlops.domain.manifest import RunManifest, parse_manifest
 from mlops.ports.artifacts import ArtifactError, ArtifactStore
 from mlops.ui.actions import UiActions
 from mlops.ui.rows import (
@@ -290,7 +290,7 @@ class RunScreen(Screen[None]):
         spec = manifest = None
         if summary.status != "UNREADABLE":
             spec = ExperimentSpec.model_validate_json(store.get(self.run_id, SPEC))
-            manifest = RunManifest.model_validate_json(manifest_bytes) if manifest_bytes else None
+            manifest = parse_manifest(manifest_bytes) if manifest_bytes else None
         _fill(
             self.query_one("#overview", DataTable),
             ("FIELD", "VALUE"),

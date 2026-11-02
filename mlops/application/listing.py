@@ -27,7 +27,7 @@ from mlops.application.progress import PROGRESS, is_live, read_progress
 from mlops.domain.best import BestRecord
 from mlops.domain.experiment import ExperimentSpec
 from mlops.domain.identity import compute_experiment_id
-from mlops.domain.manifest import RunManifest
+from mlops.domain.manifest import parse_manifest
 from mlops.ports.artifacts import ArtifactError, ArtifactStore
 
 
@@ -147,7 +147,7 @@ def group_by_experiment(runs: list[RunSummary], *, atol: float = 0.0) -> list[Ex
 def _summarise(store: ArtifactStore, run_id: str, files: list[str], now: float) -> RunSummary:
     try:
         spec = ExperimentSpec.model_validate_json(store.get(run_id, SPEC))
-        manifest = RunManifest.model_validate_json(store.get(run_id, MANIFEST)) if MANIFEST in files else None
+        manifest = parse_manifest(store.get(run_id, MANIFEST)) if MANIFEST in files else None
     except (ValidationError, ValueError) as e:
         return RunSummary(run_id=run_id, experiment_id="?", name="?", status="UNREADABLE", error=str(e).splitlines()[0])
     # local runs keep checkpoint.pt here; Ray runs keep theirs in Ray storage and leave launch.json
