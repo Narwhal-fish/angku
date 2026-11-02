@@ -1176,7 +1176,16 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+# PyTorch's caching allocator reads this at the first CUDA allocation, so setting it here is in time
+# (Ray workers started from this process inherit it; the image sets it too). It changes how memory
+# is carved up, never a result (checked bit-exact on SwinUNETR): without it the baseline's batch of
+# 4 x 96^3 fragments past 16 GB of VRAM and, on WSL, spills into shared memory (~7x slower).
+CUDA_ALLOC_CONF = "PYTORCH_CUDA_ALLOC_CONF"
+CUDA_ALLOC_DEFAULT = "expandable_segments:True"
+
+
 def main(argv: list[str] | None = None) -> int:
+    os.environ.setdefault(CUDA_ALLOC_CONF, CUDA_ALLOC_DEFAULT)  # a value the user set wins
     args = build_parser().parse_args(argv)
     try:
         return args.func(args)

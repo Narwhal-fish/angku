@@ -14,3 +14,5 @@ artifacts/
 
 # kind cluster state (scripts/kind-up.sh): run bundles and Ray checkpoints of the local cluster
 .kind/
+# scripts/gpu-verify.sh: its spec and bundles
+.gpu/

@@ -6,6 +6,10 @@ install gives a clear hint instead of "unknown loss".
 Runner contract is logits ``(N, C, *spatial)`` and integer targets
 ``(N, *spatial)``; MONAI wants the target with a channel dim ``(N, 1, *spatial)``
 when ``to_onehot_y`` is set, so the wrapper adds it.
+
+MONAI's cross-entropy term is ``nn.CrossEntropyLoss``, which cannot run on CUDA with
+deterministic algorithms on; the wrapper swaps in ``CrossEntropy`` (same arguments, same
+results on CPU; see ``_cross_entropy.py``).
 """
 
 from __future__ import annotations
@@ -15,6 +19,7 @@ from typing import Literal
 from pydantic import Field
 from torch import Tensor, nn
 
+from experiments.losses._cross_entropy import CrossEntropy
 from mlops.registry import LOSSES, Params
 
 
@@ -51,4 +56,7 @@ def build_dice_ce(p: DiceCEParams) -> nn.Module:
         from monai.losses import DiceCELoss
     except ImportError as e:
         raise ImportError("loss 'dice_ce' needs MONAI: uv pip install -e \".[medical]\"") from e
-    return _DiceCE(DiceCELoss(**p.model_dump()))
+    inner = DiceCELoss(**p.model_dump())
+    ce = inner.cross_entropy
+    inner.cross_entropy = CrossEntropy(weight=ce.weight, reduction=ce.reduction, label_smoothing=ce.label_smoothing)
+    return _DiceCE(inner)

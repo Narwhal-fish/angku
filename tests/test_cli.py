@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import types
@@ -13,7 +14,7 @@ import yaml
 
 from mlops.application.bundle import MANIFEST, MODEL, SPEC
 from mlops.application.report import REPORT
-from mlops.cli import main
+from mlops.cli import CUDA_ALLOC_CONF, main
 from mlops.config import load_experiment_yaml
 from mlops.domain import RunManifest, compute_experiment_id, compute_run_id
 
@@ -964,3 +965,18 @@ def test_list_atol_and_best(tmp_path, capsys):
     assert main(["list", "--artifacts", str(art), "--atol", "1e-6", "--json"]) == 0
     (g,) = json.loads(capsys.readouterr().out)
     assert g["atol"] == 1e-6 and g["metrics_agree"] is True
+
+
+# --- CUDA allocator default ---
+
+
+def test_cli_turns_on_expandable_segments(monkeypatch, capsys):
+    monkeypatch.delenv(CUDA_ALLOC_CONF, raising=False)
+    assert main(["id", str(SMOKE)]) == 0
+    assert os.environ[CUDA_ALLOC_CONF] == "expandable_segments:True"
+
+
+def test_cli_keeps_a_cuda_allocator_setting_the_user_chose(monkeypatch, capsys):
+    monkeypatch.setenv(CUDA_ALLOC_CONF, "max_split_size_mb:128")
+    assert main(["id", str(SMOKE)]) == 0
+    assert os.environ[CUDA_ALLOC_CONF] == "max_split_size_mb:128"

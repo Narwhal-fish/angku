@@ -10,3 +10,4 @@ mlruns
 tests
 scripts
 .kind
+.gpu

@@ -41,6 +41,13 @@ def test_commit_is_required_validated_and_baked_in():
     assert re.search(r"^ENV .*MLOPS_GIT_COMMIT=\$\{MLOPS_GIT_COMMIT\}", DOCKERFILE, re.M)
 
 
+def test_cuda_allocator_default_is_the_cli_one():
+    # Ray workers on other nodes do not inherit the driver's environment: the image sets it for every pod.
+    from mlops.cli import CUDA_ALLOC_CONF, CUDA_ALLOC_DEFAULT
+
+    assert re.search(rf"^ENV {CUDA_ALLOC_CONF}={re.escape(CUDA_ALLOC_DEFAULT)}$", DOCKERFILE, re.M)
+
+
 def test_experiments_are_importable_from_any_working_directory():
     # The Ray job driver does not start in /app; `discover("experiments")` must still work.
     assert re.search(r"^ENV .*PYTHONPATH=/app", DOCKERFILE, re.M)
