@@ -3,6 +3,8 @@ name = "mlops"
 version = "0.0.1"
 description = "MLOps platform for reproducible model-training experiments"
 requires-python = ">=3.12"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 # Core platform: framework-agnostic except for torch (the runner needs it).
 # Install with `uv pip install -e ".[dev]" --torch-backend=auto` so uv picks
 # the CPU wheel on the dev box and the matching CUDA wheel on GPU machines.

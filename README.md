@@ -1,5 +1,7 @@
 # mlManager
 
+[![ci](https://github.com/Narwhal-fish/mlManager/actions/workflows/ci.yml/badge.svg)](https://github.com/Narwhal-fish/mlManager/actions/workflows/ci.yml)
+
 Train models so that anyone can get the same result again.
 
 mlManager runs your training experiments, locally or on a Kubernetes cluster with Ray, and
@@ -17,6 +19,16 @@ tiny-cnn-smoke: REPRODUCED
 
 It was built for medical imaging research (MONAI, SwinUNETR, the MSD Spleen dataset), but works
 with any PyTorch model.
+
+## Status
+
+Verified on a local KubeRay cluster on kind (CPU, 2 workers: interrupt, resume and reproduce all
+bit-identical) and on a single NVIDIA RTX 5070 Ti (SwinUNETR on the MSD Spleen dataset: run,
+reproduce and resume bit-identical, also inside the training image). Not yet verified: several
+GPUs on one machine, GPU pods on KubeRay, and training across several nodes (see issues
+[#8](https://github.com/Narwhal-fish/mlManager/issues/8),
+[#9](https://github.com/Narwhal-fish/mlManager/issues/9) and
+[#10](https://github.com/Narwhal-fish/mlManager/issues/10)).
 
 ## What it does for you
 
@@ -290,3 +302,7 @@ MLFLOW_DISABLE_AGENT_HINT=1 .venv/bin/python -m pytest -q
 
 GitHub Actions runs them on every pull request, once with every extra installed and
 once with only the core.
+
+## License
+
+[Apache-2.0](LICENSE)
