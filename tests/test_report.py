@@ -184,7 +184,7 @@ def test_environment_section_says_pins_are_declared_not_verified(bundle):
 
 def test_reproduce_command_is_given(bundle):
     body = _section(render_report(bundle), "Reproduce")
-    assert f"mlops reproduce {bundle.manifest.run_id}" in body
+    assert f"angku reproduce {bundle.manifest.run_id}" in body
 
 
 # --- FAILED runs ---

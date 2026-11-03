@@ -15,5 +15,5 @@ class BundleFormatError(DomainError, ValueError):
         self.version = version
         self.known = known
         super().__init__(
-            f"{what} was written by a newer mlops (format {version}, this one reads up to {known}): upgrade mlops"
+            f"{what} was written by a newer angku (format {version}, this one reads up to {known}): upgrade angku"
         )

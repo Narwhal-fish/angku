@@ -319,7 +319,7 @@ def _json_float(v: Any) -> Any:
     return None if isinstance(v, float) and math.isnan(v) else v
 
 
-# -- text: what `mlops diff` prints, and what the UI shows ----------------------
+# -- text: what `angku diff` prints, and what the UI shows ----------------------
 
 
 def format_value(v: Any) -> str:

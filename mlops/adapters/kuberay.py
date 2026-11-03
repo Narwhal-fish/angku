@@ -1,10 +1,10 @@
 """KubeRay: turn an ExperimentSpec into a ``RayJob`` custom resource.
 
-The job's entrypoint is ``mlops run ... --launcher ray`` inside the pinned
+The job's entrypoint is ``angku run ... --launcher ray`` inside the pinned
 training image, so the same code path as a laptop run executes on the
 cluster; ``RayLauncher`` then spreads ``resources.workers`` ranks over the
 worker pods. The spec itself rides along in a ConfigMap as JSON (a YAML
-subset, so ``mlops run`` loads it unchanged). Everything that matters for
+subset, so ``angku run`` loads it unchanged). Everything that matters for
 reproducibility is already pinned in the spec: the image by digest, the code
 by commit (baked into that image), the data by snapshot.
 
@@ -71,7 +71,7 @@ def render_rayjob(
 
     ``data_pvc`` mounts the dataset read-only at ``data_path`` on the head *and* every worker
     (the DataProvider is built on the driver and pickled to the ranks with its root) and passes
-    ``--data-root data_path`` to ``mlops run``.
+    ``--data-root data_path`` to ``angku run``.
 
     ``checkpoint_every`` makes the job resumable after ``shutdownAfterJobFinishes`` has deleted
     its cluster: Ray Train's checkpoints go to ``ray_storage_pvc`` (writable, mounted on every
@@ -79,7 +79,7 @@ def render_rayjob(
     ``artifacts_pvc``; both are required. ``resume=True`` renders a RayJob with
     ``generateName: <name>-resume-`` (Kubernetes adds a suffix, so earlier finished jobs of the run
     never have to be deleted; submit with ``kubectl create``) whose entrypoint is
-    ``mlops resume RUN_ID``: spec, attempt, interval and storage path come from those PVCs (so
+    ``angku resume RUN_ID``: spec, attempt, interval and storage path come from those PVCs (so
     mount them at the same paths as the first job), no ConfigMap needed.
     """
     if not spec.is_pinned():
@@ -102,10 +102,10 @@ def render_rayjob(
 
     if resume:
         # Not `--attempt`/`--ray-storage`: launch.json on the artifacts PVC records both.
-        entrypoint = ["mlops", "resume", run_id, "--artifacts", artifacts_path]
+        entrypoint = ["angku", "resume", run_id, "--artifacts", artifacts_path]
     else:
         entrypoint = [
-            "mlops",
+            "angku",
             "run",
             f"{SPEC_MOUNT}/{SPEC_FILE}",
             "--launcher",
@@ -278,7 +278,7 @@ class RayJobStatus:
     dashboard_url: str = ""
     start_time: str = ""
     end_time: str = ""
-    run_id: str | None = None  # from our annotations: which mlops run this job is
+    run_id: str | None = None  # from our annotations: which angku run this job is
     experiment_id: str | None = None
 
     @property
@@ -373,7 +373,7 @@ def follow_rayjob_logs(
 
     KubeRay submits the entrypoint through a Kubernetes Job named like the RayJob, whose pod
     runs ``ray job submit`` and tails the driver output, so ``kubectl logs job/NAME`` is the
-    run's stdout/stderr (``mlops run`` summary and warnings included).
+    run's stdout/stderr (``angku run`` summary and warnings included).
     """
     cmd = [*kubectl, "logs", "-n", namespace, f"job/{name}"]
     if follow:

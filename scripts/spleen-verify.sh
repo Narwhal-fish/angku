@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
 # Check SwinUNETR on the real MSD Task09 spleen data on this machine's GPU (roadmap 21, phase 3):
 #
-#   1. `mlops snapshot`: the data under DATA_ROOT hashes to the snapshot pinned in
+#   1. `angku snapshot`: the data under DATA_ROOT hashes to the snapshot pinned in
 #      experiments/configs/swinunetr_baseline.yaml
 #   2. measure: one train epoch (batch 4 x 96^3 crops) and sliding-window validation of the 9
 #      full val volumes, time + peak VRAM; both must fit in the GPU's memory
 #   3. run A (attempt 1, the baseline spec cut to EPOCHS epochs, keep-best val/dice/spleen)
-#   4. `mlops reproduce A`: bit-exact on the same GPU (history, model.pt, best.pt)
+#   4. `angku reproduce A`: bit-exact on the same GPU (history, model.pt, best.pt)
 #   5. run B (attempt 2, checkpoint every 2 epochs) SIGKILLed from inside at epoch KILL_AT_EPOCH,
-#      then `mlops resume B`: B == A bit for bit (history, model.pt, best.pt)
+#      then `angku resume B`: B == A bit for bit (history, model.pt, best.pt)
 #
 #   scripts/spleen-verify.sh DATA_ROOT        (DATA_ROOT holds Task09_Spleen/; or $MLOPS_DATA_ROOT)
 #
 # Needs torch with CUDA, the medical extra and the data; exit 2 otherwise. Sets
-# PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True unless already set (the mlops CLI does too; the
+# PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True unless already set (the angku CLI does too; the
 # measure step does not go through it): without it a batch of 4
 # reserves more than a 16 GB card and spills into shared memory (~7x slower on WSL). The setting
 # changes allocation only, not results. Spec -> .gpu/spleen/swinunetr_gpu.yaml, bundles ->
@@ -33,7 +33,7 @@ BASELINE=experiments/configs/swinunetr_baseline.yaml
 OUT=.gpu/spleen
 SPEC=$OUT/swinunetr_gpu.yaml
 ART=$OUT/artifacts
-mlops() { "$PY" -m mlops "$@"; }
+angku() { "$PY" -m mlops "$@"; }
 step() { echo; echo "== $*"; }
 
 step "GPU + data"
@@ -70,7 +70,7 @@ print(f"{path}: {baseline} with {epochs} epochs, commit {commit[:12]}")
 EOF
 
 step "snapshot"
-mlops snapshot "$SPEC" --data-root "$DATA_ROOT" > $OUT/snapshot.txt
+angku snapshot "$SPEC" --data-root "$DATA_ROOT" > $OUT/snapshot.txt
 cat $OUT/snapshot.txt
 
 step "measure: one train epoch + sliding-window validation"
@@ -130,14 +130,14 @@ for k in ("train_epoch", "sliding_window_val"):
 EOF
 
 step "run A (attempt 1)"
-mlops run "$SPEC" --artifacts "$ART" --data-root "$DATA_ROOT" --tracker inmemory --attempt 1 \
+angku run "$SPEC" --artifacts "$ART" --data-root "$DATA_ROOT" --tracker inmemory --attempt 1 \
     --keep-best val/dice/spleen:max --json > $OUT/run_a.json
 RUN_A="$("$PY" -c 'import json,sys; print(json.load(open(sys.argv[1]))["run_id"])' $OUT/run_a.json)"
 echo "run A = $RUN_A"
 
 step "reproduce A"
 set +e
-mlops reproduce "$RUN_A" --artifacts "$ART" --data-root "$DATA_ROOT" --tracker inmemory --json > $OUT/reproduce_a.json
+angku reproduce "$RUN_A" --artifacts "$ART" --data-root "$DATA_ROOT" --tracker inmemory --json > $OUT/reproduce_a.json
 REPRODUCE_EXIT=$?
 set -e
 echo "exit $REPRODUCE_EXIT"
@@ -191,10 +191,10 @@ from mlops.config import load_experiment_yaml
 from mlops.domain import compute_experiment_id, compute_run_id
 s = load_experiment_yaml(sys.argv[1]); print(compute_run_id(compute_experiment_id(s), s.resources, 2))' "$SPEC")"
 echo "run B = $RUN_B"
-mlops list --artifacts "$ART" --json > $OUT/list_killed.json
+angku list --artifacts "$ART" --json > $OUT/list_killed.json
 
 step "resume B"
-mlops resume "$RUN_B" --artifacts "$ART" --data-root "$DATA_ROOT" --tracker inmemory --json > $OUT/resume_b.json
+angku resume "$RUN_B" --artifacts "$ART" --data-root "$DATA_ROOT" --tracker inmemory --json > $OUT/resume_b.json
 
 step "checks"
 "$PY" - "$ART" "$RUN_A" "$RUN_B" "$REPRODUCE_EXIT" "$KILL_EXIT" "$KILL_AT_EPOCH" "$EPOCHS" "$BASELINE" "$OUT" <<'EOF'

@@ -1,7 +1,7 @@
 """scripts/image-verify.sh: the GPU training image on a real GPU (roadmap 21).
 
 CI builds no image and has no GPU, and the full job allows no skipped test, so the checks live in
-a script and the tests only check it statically: it parses, every `mlops` command line (host and
+a script and the tests only check it statically: it parses, every `angku` command line (host and
 in-container) is accepted by the real parser, the spec pins what the image itself carries, and
 what it writes stays out of git and the image.
 """
@@ -37,12 +37,12 @@ def test_script_parses_and_is_strict():
         ["run", "s.yaml", "--artifacts", "h", "--data-root", "d", "--tracker", "inmemory", "--json"],
     ],
 )  # fmt: skip
-def test_mlops_command_lines_parse(argv):
+def test_angku_command_lines_parse(argv):
     build_parser().parse_args(argv)
 
 
-def test_every_mlops_command_in_the_script_is_covered():
-    lines = [ln.strip() for ln in TEXT.splitlines() if re.match(r"\s*(in_image )?mlops ", ln)]
+def test_every_angku_command_in_the_script_is_covered():
+    lines = [ln.strip() for ln in TEXT.splitlines() if re.match(r"\s*(in_image )?angku ", ln)]
     assert sorted({ln.removeprefix("in_image ").split()[1] for ln in lines}) == ["reproduce", "run"]
 
 

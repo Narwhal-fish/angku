@@ -1,4 +1,4 @@
-"""`ensemble_runs` / `mlops ensemble`: soft and hard voting over several runs' predictions on the
+"""`ensemble_runs` / `angku ensemble`: soft and hard voting over several runs' predictions on the
 same cases (roadmap 15, phase 3 of the split/predict/ensemble plan)."""
 
 from __future__ import annotations

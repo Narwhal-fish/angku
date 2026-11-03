@@ -1,4 +1,4 @@
-"""`predict_run(mc_samples=)` / `mlops predict --mc-samples`: MC dropout uncertainty (roadmap 15,
+"""`predict_run(mc_samples=)` / `angku predict --mc-samples`: MC dropout uncertainty (roadmap 15,
 phase 4 of the split/predict/ensemble plan)."""
 
 from __future__ import annotations

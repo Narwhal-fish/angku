@@ -1,7 +1,7 @@
 """Port: where Ray Train keeps a run's checkpoints (``storage_path/<ray run name>``).
 
 Outside the artifact root: ``launch.json`` records the storage path, Ray writes the directory.
-Only ``mlops gc`` needs this port, to remove what a deleted run left there.
+Only ``angku gc`` needs this port, to remove what a deleted run left there.
 """
 
 from __future__ import annotations

@@ -3,6 +3,8 @@ name = "mlops"
 version = "0.0.1"
 description = "MLOps platform for reproducible model-training experiments"
 requires-python = ">=3.12"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 # Core platform: framework-agnostic except for torch (the runner needs it).
 # Install with `uv pip install -e ".[dev]" --torch-backend=auto` so uv picks
 # the CPU wheel on the dev box and the matching CUDA wheel on GPU machines.
@@ -17,14 +19,14 @@ dev = [
     "pytest>=8.0",
     "mlflow>=3.0",  # so the MLflow tracker tests run on the dev box
     "ray[train]>=2.40",  # so the Ray launcher tests run on the dev box
-    "textual>=8.0",  # so the `mlops ui` tests run on the dev box
+    "textual>=8.0",  # so the `angku ui` tests run on the dev box
     "ruff==0.17.0",  # pinned: CI runs the same version, a new release must not fail old code
 ]
 # Optional tracking backends. The core never imports them at module import time.
 tracking = [
     "mlflow>=3.0",
 ]
-# `mlops ui`: terminal browser over an artifact root.
+# `angku ui`: terminal browser over an artifact root.
 tui = [
     "textual>=8.0",
 ]
@@ -40,7 +42,7 @@ medical = [
 ]
 
 [project.scripts]
-mlops = "mlops.cli:main"
+angku = "mlops.cli:main"
 
 [build-system]
 requires = ["hatchling"]

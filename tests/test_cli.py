@@ -1,4 +1,4 @@
-"""`mlops` command line: the composition root that wires adapters into run_experiment."""
+"""`angku` command line: the composition root that wires adapters into run_experiment."""
 
 from __future__ import annotations
 
@@ -236,7 +236,7 @@ def test_rayjob_unpinned_spec_exits_2(tmp_path, capsys):
 
 # --- reproduce ---
 #
-# `mlops reproduce RUN_ID --artifacts DIR`: re-run the bundle and compare.
+# `angku reproduce RUN_ID --artifacts DIR`: re-run the bundle and compare.
 # Exit 0 reproduced / 1 mismatch (details printed) / 2 bad input.
 
 
@@ -404,7 +404,7 @@ def spec_two_workers_bundle(tmp_path):
 
 # --- report ---
 #
-# `mlops run --artifacts` writes report.md next to the bundle; `mlops report RUN_ID`
+# `angku run --artifacts` writes report.md next to the bundle; `angku report RUN_ID`
 # re-renders it from the bundle (stdout, or --out FILE).
 
 
@@ -445,7 +445,7 @@ def test_report_unknown_run_id_exits_2(tmp_path, capsys):
 
 # --- environment verification ---
 #
-# `mlops run` records the actual environment in manifest.json and warns on stderr when it
+# `angku run` records the actual environment in manifest.json and warns on stderr when it
 # does not match the pins; `--strict-env` refuses to start unless every check is ok.
 
 
@@ -503,7 +503,7 @@ def test_strict_env_runs_when_everything_verifies(tmp_path, capsys, probe, monke
 
 
 def _killed_run(tmp_path, capsys, monkeypatch, *, epochs=3, fail_at=3):
-    """`mlops run --checkpoint-every 1` that dies at epoch ``fail_at``; returns (art, run_id)."""
+    """`angku run --checkpoint-every 1` that dies at epoch ``fail_at``; returns (art, run_id)."""
     import mlops.cli as cli
     from tests.test_checkpoint import FlakyTracker
 
@@ -747,7 +747,7 @@ def test_list_no_match_says_so(tmp_path, capsys):
 
 # --- following a RayJob ---
 #
-# `mlops rayjob-status NAME`: exit 0 succeeded or still going / 1 failed or stopped / 2 kubectl error.
+# `angku rayjob-status NAME`: exit 0 succeeded or still going / 1 failed or stopped / 2 kubectl error.
 
 
 def _fake_kubectl(monkeypatch, stdout="", returncode=0, stderr=""):
@@ -813,7 +813,7 @@ def test_rayjob_submit_says_how_to_follow_it(capsys, monkeypatch):
     _fake_kubectl(monkeypatch)
     assert main(["rayjob", str(BASELINE), "--data-pvc", "msd", "--submit", "--namespace", "ml"]) == 0
     out = capsys.readouterr().out
-    assert "mlops rayjob-status mlops-" in out and "mlops rayjob-logs mlops-" in out and "--namespace ml" in out
+    assert "angku rayjob-status mlops-" in out and "angku rayjob-logs mlops-" in out and "--namespace ml" in out
 
 
 def test_rayjob_for_a_file_dataset_needs_a_data_pvc(capsys):
@@ -876,11 +876,11 @@ def test_rayjob_resumability_without_pvcs_exits_2(capsys, flags, hint, mode):
     assert hint in err and "Traceback" not in err
 
 
-def test_rayjob_resume_renders_one_rayjob_running_mlops_resume(capsys):
+def test_rayjob_resume_renders_one_rayjob_running_angku_resume(capsys):
     assert main(["rayjob", str(BASELINE), *_RESUMABLE, "--attempt", "2", "--resume"]) == 0
     (job,) = json.loads(capsys.readouterr().out)["items"]
     assert job["metadata"]["generateName"].endswith("-a2-resume-")
-    assert job["spec"]["entrypoint"].startswith("mlops resume " + job["metadata"]["annotations"]["mlops.io/run-id"])
+    assert job["spec"]["entrypoint"].startswith("angku resume " + job["metadata"]["annotations"]["mlops.io/run-id"])
 
 
 def _fake_cluster(monkeypatch, jobs=(), create_rc=0):
@@ -916,7 +916,7 @@ def test_rayjob_resume_submit_checks_then_creates(capsys, monkeypatch):
     assert calls[1][:2] == ["kubectl", "create"]
     out = capsys.readouterr().out
     assert "submitted RayJob mlops-abc-a1-resume-x8k2p" in out
-    assert "mlops rayjob-status mlops-abc-a1-resume-x8k2p --namespace ml" in out
+    assert "angku rayjob-status mlops-abc-a1-resume-x8k2p --namespace ml" in out
 
 
 def test_rayjob_resume_refuses_while_a_job_of_the_run_is_still_going(capsys, monkeypatch):

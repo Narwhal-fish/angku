@@ -1,29 +1,29 @@
-"""``mlops`` command line. The composition root: the one place that picks
+"""``angku`` command line. The composition root: the one place that picks
 concrete adapters (tracker, data provider, artifact store) and hands them to
 ``run_experiment``. Nothing under ``mlops/application`` knows this exists.
 
-    mlops id     experiment.yaml
-    mlops run    experiment.yaml [--artifacts DIR] [--data-root DIR] [--tracker mlflow|inmemory]
+    angku id     experiment.yaml
+    angku run    experiment.yaml [--artifacts DIR] [--data-root DIR] [--tracker mlflow|inmemory]
                                  [--mlflow-uri URI] [--launcher local|ray] [--ray-address ADDR]
                                  [--device cpu] [--attempt N] [--checkpoint-every N] [--keep-checkpoint]
                                  [--keep-best METRIC:min|max] [--strict-env] [--json]
-    mlops resume RUN_ID --artifacts DIR [--data-root DIR] [--tracker mlflow|inmemory] [--mlflow-uri URI]
+    angku resume RUN_ID --artifacts DIR [--data-root DIR] [--tracker mlflow|inmemory] [--mlflow-uri URI]
                                  [--device cpu] [--ray-address ADDR] [--checkpoint-every N] [--keep-checkpoint]
                                  [--json]
-    mlops rayjob experiment.yaml [--namespace NS] [--artifacts-pvc PVC] [--data-pvc PVC] [--attempt N]
+    angku rayjob experiment.yaml [--namespace NS] [--artifacts-pvc PVC] [--data-pvc PVC] [--attempt N]
                                  [--checkpoint-every N --ray-storage-pvc PVC] [--resume]
                                  [--submit [--kubectl "kubectl --context X"]]
-    mlops rayjob-status NAME [--namespace NS] [--kubectl CMD] [--json]
-    mlops rayjob-logs   NAME [--namespace NS] [--kubectl CMD] [-f]
-    mlops reproduce RUN_ID --artifacts DIR [--data-root DIR] [--tracker mlflow|inmemory] [--mlflow-uri URI]
+    angku rayjob-status NAME [--namespace NS] [--kubectl CMD] [--json]
+    angku rayjob-logs   NAME [--namespace NS] [--kubectl CMD] [-f]
+    angku reproduce RUN_ID --artifacts DIR [--data-root DIR] [--tracker mlflow|inmemory] [--mlflow-uri URI]
                                  [--device cpu] [--atol X] [--launcher local|ray] [--ray-address ADDR] [--json]
-    mlops report RUN_ID --artifacts DIR [--out FILE]
-    mlops diff   RUN_A RUN_B --artifacts DIR [--artifacts-b DIR] [--atol X] [--json]
-    mlops list   --artifacts DIR [--experiment ID_PREFIX] [--atol X] [--json]
-    mlops snapshot experiment.yaml [--data-root DIR]
-    mlops gc     --artifacts DIR [--experiment ID_PREFIX] [--resumable] [--keep-attempts N]
+    angku report RUN_ID --artifacts DIR [--out FILE]
+    angku diff   RUN_A RUN_B --artifacts DIR [--artifacts-b DIR] [--atol X] [--json]
+    angku list   --artifacts DIR [--experiment ID_PREFIX] [--atol X] [--json]
+    angku snapshot experiment.yaml [--data-root DIR]
+    angku gc     --artifacts DIR [--experiment ID_PREFIX] [--resumable] [--keep-attempts N]
                                  [--ray-storage [--ray-storage-mount DIR]] [--apply] [--json]
-    mlops ui     --artifacts DIR [--experiment ID_PREFIX] [--refresh SECONDS] [--data-root DIR]
+    angku ui     --artifacts DIR [--experiment ID_PREFIX] [--refresh SECONDS] [--data-root DIR]
                                  [--tracker mlflow|inmemory] [--mlflow-uri URI] [--device cpu]
                                  [--ray-address ADDR] [--atol X] [--namespace NS] [--kubectl CMD]
 
@@ -134,7 +134,7 @@ def _load(path: str) -> ExperimentSpec:
 
 
 def _discover(package: str) -> None:
-    # `mlops` as a console script does not put the cwd on sys.path; `python -m` does.
+    # `angku` as a console script does not put the cwd on sys.path; `python -m` does.
     cwd = os.getcwd()
     if cwd not in sys.path:
         sys.path.insert(0, cwd)
@@ -271,7 +271,7 @@ def _launch_and_report(
     **launch: Any,
 ) -> int:
     """Launch, write report.md, warn about unverified pins, print the summary. Shared by run/resume.
-    With a store the run keeps progress.json current while it trains (``mlops ui`` shows it live)."""
+    With a store the run keeps progress.json current while it trains (``angku ui`` shows it live)."""
     run_id = compute_run_id(compute_experiment_id(spec), spec.resources, attempt)
     if store is not None:
         launch["tracker"] = LiveProgress(launch["tracker"], store)
@@ -338,7 +338,7 @@ def _resume_target(
     store: LocalArtifactStore, run_id: str, *, ray_address: str | None, experiments: str
 ) -> tuple[ExperimentSpec, Launcher, int, str]:
     """(spec, launcher, attempt, launcher name) to continue ``run_id``; refuses a FINISHED run or
-    one with nothing to resume from. Shared by `mlops resume` and `mlops ui`."""
+    one with nothing to resume from. Shared by `angku resume` and `angku ui`."""
     try:
         spec = ExperimentSpec.model_validate_json(store.get(run_id, SPEC))
     except ArtifactError as e:
@@ -455,10 +455,10 @@ def cmd_rayjob(args: argparse.Namespace) -> int:
         raise CliError(str(e)) from e
     print(f"submitted RayJob {name} in namespace {args.namespace}")
     follow = f"--namespace {args.namespace}" + (f" --kubectl '{args.kubectl}'" if args.kubectl != "kubectl" else "")
-    print(f"  status: mlops rayjob-status {name} {follow}")
-    print(f"  logs:   mlops rayjob-logs {name} {follow} -f")
+    print(f"  status: angku rayjob-status {name} {follow}")
+    print(f"  logs:   angku rayjob-logs {name} {follow} -f")
     if args.checkpoint_every is not None and not args.resume:
-        print(f"  resume: mlops rayjob {args.experiment} --resume {_rayjob_volume_flags(args)} --submit")
+        print(f"  resume: angku rayjob {args.experiment} --resume {_rayjob_volume_flags(args)} --submit")
     return 0
 
 
@@ -531,7 +531,7 @@ def _reproduce(
     store: LocalArtifactStore, run_id: str, args: argparse.Namespace
 ) -> tuple[ExperimentSpec, ReproduceReport]:
     """Replay ``run_id`` with the launcher that made it (or ``args.launcher``). Shared by
-    `mlops reproduce` and `mlops ui`; bad input -> CliError, a replay that blows up propagates."""
+    `angku reproduce` and `angku ui`; bad input -> CliError, a replay that blows up propagates."""
     try:
         spec = ExperimentSpec.model_validate_json(store.get(run_id, SPEC))
         manifest = parse_manifest(store.get(run_id, MANIFEST))
@@ -543,7 +543,7 @@ def _reproduce(
     try:
         with tempfile.TemporaryDirectory(prefix="mlops-reproduce-") as ray_storage:
             launcher = _replay_launcher(
-                replay_launcher(manifest, spec, getattr(args, "launcher", None)),  # `mlops ui` has no --launcher
+                replay_launcher(manifest, spec, getattr(args, "launcher", None)),  # `angku ui` has no --launcher
                 ray_address=args.ray_address,
                 storage=ray_storage,
                 experiments=args.experiments,
@@ -617,7 +617,7 @@ def cmd_predict(args: argparse.Namespace) -> int:
 
 def cmd_ensemble(args: argparse.Namespace) -> int:
     if len(args.run_ids) < 2:
-        raise CliError("an ensemble needs at least two runs (use `mlops predict` for one)")
+        raise CliError("an ensemble needs at least two runs (use `angku predict` for one)")
     store = LocalArtifactStore(args.artifacts)
     try:
         spec = ExperimentSpec.model_validate_json(store.get(args.run_ids[0], SPEC))
@@ -759,7 +759,7 @@ def _print_group(g: ExperimentGroup) -> None:
         if r.resumes:
             notes.append(f"resumed x{r.resumes}")
         if r.resumable:
-            notes.append(f"resumable: mlops resume {r.run_id[:12]}...")
+            notes.append(f"resumable: angku resume {r.run_id[:12]}...")
         if r.error:
             notes.append(r.error)
         metrics = "  ".join(f"{k}={format_value(v)}" for k, v in r.final_metrics.items())
@@ -776,7 +776,7 @@ def cmd_ui(args: argparse.Namespace) -> int:
     try:
         from mlops.ui.app import MlopsApp
     except ImportError as e:
-        raise CliError("mlops ui needs the 'tui' extra: uv pip install -e '.[tui]'") from e
+        raise CliError("angku ui needs the 'tui' extra: uv pip install -e '.[tui]'") from e
     store = LocalArtifactStore(root)
     MlopsApp(
         store,
@@ -790,7 +790,7 @@ def cmd_ui(args: argparse.Namespace) -> int:
 
 
 def _ui_actions(args: argparse.Namespace, store: LocalArtifactStore) -> UiActions:
-    """reproduce / resume for `mlops ui`, wired like `mlops reproduce` and `mlops resume`."""
+    """reproduce / resume for `angku ui`, wired like `angku reproduce` and `angku resume`."""
 
     def reproduce(run_id: str) -> ReproduceReport:
         return _reproduce(store, run_id, args)[1]
@@ -812,7 +812,7 @@ def _ui_actions(args: argparse.Namespace, store: LocalArtifactStore) -> UiAction
                 probe=_probe(),
                 resume=True,
             )
-        finally:  # FINISHED or FAILED: the bundle's report.md follows it, as after `mlops resume`
+        finally:  # FINISHED or FAILED: the bundle's report.md follows it, as after `angku resume`
             store.delete(run_id, PROGRESS)
             try:
                 write_report(store, run_id)
@@ -870,7 +870,7 @@ def _add_keep_checkpoint(p: argparse.ArgumentParser) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="mlops", description=__doc__.split("\n\n")[0])
+    p = argparse.ArgumentParser(prog="angku", description=__doc__.split("\n\n")[0])
     sub = p.add_subparsers(dest="command", required=True)
 
     id_ = sub.add_parser("id", help="print the ExperimentID of a spec without running it")
@@ -900,7 +900,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         metavar="N",
         help="store the training state as checkpoint.pt every N epochs (needs --artifacts); "
-        "makes the run resumable with `mlops resume`",
+        "makes the run resumable with `angku resume`",
     )
     _add_keep_checkpoint(run)
     run.add_argument(
@@ -968,11 +968,11 @@ def build_parser() -> argparse.ArgumentParser:
         "(ReadWriteMany across nodes); passed as --ray-storage",
     )
     rj.add_argument("--ray-storage-path", default="/ray-storage", help="mount path of that PVC inside the pods")
-    rj.add_argument("--keep-best", metavar="METRIC:min|max", help="passed to the in-cluster `mlops run`")
+    rj.add_argument("--keep-best", metavar="METRIC:min|max", help="passed to the in-cluster `angku run`")
     rj.add_argument(
         "--resume",
         action="store_true",
-        help="render a RayJob (<name>-resume-<generated>) that runs `mlops resume` for this spec + --attempt "
+        help="render a RayJob (<name>-resume-<generated>) that runs `angku resume` for this spec + --attempt "
         "from the checkpoints on the PVCs; pass the same PVCs and paths as the first job",
     )
     rj.add_argument("--submit", action="store_true", help="kubectl apply the manifest instead of printing it")
@@ -983,14 +983,14 @@ def build_parser() -> argparse.ArgumentParser:
         "rayjob-status",
         help="state of a submitted RayJob (kubectl get); exit 0 succeeded or still going, 1 failed/stopped",
     )
-    rs_.add_argument("name", help="RayJob name, as printed by `mlops rayjob --submit`")
+    rs_.add_argument("name", help="RayJob name, as printed by `angku rayjob --submit`")
     rs_.add_argument("--namespace", default="default")
     rs_.add_argument("--kubectl", default="kubectl", help='kubectl command, e.g. "kubectl --context prod"')
     rs_.add_argument("--json", action="store_true", help="machine-readable status on stdout")
     rs_.set_defaults(func=cmd_rayjob_status)
 
     rl = sub.add_parser("rayjob-logs", help="driver log of a submitted RayJob (kubectl logs job/NAME)")
-    rl.add_argument("name", help="RayJob name, as printed by `mlops rayjob --submit`")
+    rl.add_argument("name", help="RayJob name, as printed by `angku rayjob --submit`")
     rl.add_argument("--namespace", default="default")
     rl.add_argument("--kubectl", default="kubectl", help='kubectl command, e.g. "kubectl --context prod"')
     rl.add_argument("-f", "--follow", action="store_true", help="keep streaming until the job ends")

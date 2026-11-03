@@ -1,4 +1,4 @@
-"""`mlops ui`: a terminal browser over an artifacts dir (roadmap 13; phase A browse, phase B actions).
+"""`angku ui`: a terminal browser over an artifacts dir (roadmap 13; phase A browse, phase B actions).
 
     mlops/ui/rows.py   pure: RunSummary / ExperimentGroup / manifest -> table cells (no textual import)
     mlops/ui/app.py    Textual: Experiments -> Runs -> Run (tabs Overview, Metrics, Environment, Report)
@@ -139,7 +139,7 @@ def test_overview_without_manifest():
     rows = dict(overview_rows(s, spec=None, manifest=None))
     assert rows["status"] == "INTERRUPTED"
     assert rows["run_id"] == "a" * 64
-    assert rows["resumable"] == f"yes: mlops resume {'a' * 64} --artifacts <DIR>"
+    assert rows["resumable"] == f"yes: angku resume {'a' * 64} --artifacts <DIR>"
     assert rows["environment"] == "no manifest"
 
 

@@ -8,7 +8,7 @@
     mismatch  both are content hashes and differ  -> the runner raises DataError, nothing runs
     unknown   provider does not hash, or the pin is not a content hash (e.g. ``dvc:...``)
 
-The result is stored as ``manifest.data_snapshot``. ``mlops snapshot <yaml>`` prints the
+The result is stored as ``manifest.data_snapshot``. ``angku snapshot <yaml>`` prints the
 served id so it can be pinned.
 """
 

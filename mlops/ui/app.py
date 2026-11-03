@@ -1,4 +1,4 @@
-"""``mlops ui``: a terminal browser over an artifact store. Needs the ``tui`` extra.
+"""``angku ui``: a terminal browser over an artifact store. Needs the ``tui`` extra.
 
 Experiments -> Runs -> Run (tabs Overview, Metrics, Environment, Report). Enter drills down,
 Esc goes back (or clears the filter first), / filters the list, Tab cycles the run's tabs.
@@ -484,7 +484,7 @@ class LogsScreen(Screen[None]):
 
 
 class DiffScreen(Screen[None]):
-    """What `mlops diff` prints for the two runs."""
+    """What `angku diff` prints for the two runs."""
 
     BINDINGS = [Binding("escape", "back", "Back")]
 
@@ -559,7 +559,7 @@ class ResultScreen(ModalScreen[None]):
 
 
 class MlopsApp(App[None]):
-    TITLE = "mlops"
+    TITLE = "angku"
     CSS = """
     #filter { dock: bottom; display: none; }
     #filter.active { display: block; }

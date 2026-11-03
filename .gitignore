@@ -6,10 +6,10 @@ __pycache__/
 dist/
 build/
 
-# Generated run report (derived from the run bundle; regenerate with `mlops report`)
+# Generated run report (derived from the run bundle; regenerate with `angku report`)
 report.md
 
-# Run outputs (`mlops run --artifacts artifacts`): bundles are evidence, not source
+# Run outputs (`angku run --artifacts artifacts`): bundles are evidence, not source
 artifacts/
 
 # kind cluster state (scripts/kind-up.sh): run bundles and Ray checkpoints of the local cluster
