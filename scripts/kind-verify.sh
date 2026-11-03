@@ -30,14 +30,14 @@ SPEC=.kind/tiny_cnn_kind.yaml
 ART=.kind/artifacts
 PVCS=(--artifacts-pvc mlops-artifacts --ray-storage-pvc mlops-ray-storage)
 STATUSES=.kind/job-statuses.txt
-mlops() { "$PY" -m mlops "$@"; }
+angku() { "$PY" -m mlops "$@"; }
 step() { echo; echo "== $*"; }
 submitted() { sed -n 's/^submitted RayJob \([^ ]*\) .*/\1/p'; }
 
 wait_job() {  # NAME -> waits until finished; records every jobStatus seen; prints the final one
     local name="$1" deadline=$((SECONDS + 1800)) st
     while [ $SECONDS -lt $deadline ]; do
-        st="$(mlops rayjob-status "$name" --kubectl "$KUBECTL" --json 2>/dev/null || true)"
+        st="$(angku rayjob-status "$name" --kubectl "$KUBECTL" --json 2>/dev/null || true)"
         if [ -n "$st" ]; then
             "$PY" -c 'import json,sys; s=json.loads(sys.argv[1]); print(s["job_status"] or "(none)")' "$st" >> "$STATUSES"
             if "$PY" -c 'import json,sys; sys.exit(0 if json.loads(sys.argv[1])["finished"] else 1)' "$st"; then
@@ -56,8 +56,8 @@ try: print(json.load(open(sys.argv[1]))["epoch"])
 except (OSError, ValueError, KeyError): print(0)' "$ART/$1/progress.json"
 }
 
-status_of() {  # RUN_ID -> "STATUS resumable|-" as `mlops list` sees it
-    mlops list --artifacts "$ART" --json | "$PY" -c 'import json,sys
+status_of() {  # RUN_ID -> "STATUS resumable|-" as `angku list` sees it
+    angku list --artifacts "$ART" --json | "$PY" -c 'import json,sys
 runs = {r["run_id"]: r for g in json.load(sys.stdin) for r in g["runs"]}
 r = runs.get(sys.argv[1])
 print(r["status"] + (" resumable" if r["resumable"] else " -") if r else "ABSENT -")' "$1"
@@ -105,7 +105,7 @@ for run in "$RUN_A" "$RUN_B"; do
 done
 
 step "run A: submit, kill at epoch $KILL_AT_EPOCH"
-JOB_A="$(mlops rayjob "$SPEC" --attempt 1 "${PVCS[@]}" --checkpoint-every 2 --submit --kubectl "$KUBECTL" | submitted)"
+JOB_A="$(angku rayjob "$SPEC" --attempt 1 "${PVCS[@]}" --checkpoint-every 2 --submit --kubectl "$KUBECTL" | submitted)"
 echo "RayJob $JOB_A"
 deadline=$((SECONDS + 1200))
 until [ "$(epoch_of "$RUN_A")" -ge "$KILL_AT_EPOCH" ]; do
@@ -128,17 +128,17 @@ STOPPED_AS="$(status_of "$RUN_A")"
 echo "run A: $STOPPED_AS"
 
 step "run A: rayjob --resume"
-JOB_A2="$(mlops rayjob "$SPEC" --attempt 1 "${PVCS[@]}" --resume --submit --kubectl "$KUBECTL" | submitted)"
+JOB_A2="$(angku rayjob "$SPEC" --attempt 1 "${PVCS[@]}" --resume --submit --kubectl "$KUBECTL" | submitted)"
 echo "RayJob $JOB_A2"
 FINAL_A="$(wait_job "$JOB_A2")"
-LOGS_A="$(mlops rayjob-logs "$JOB_A2" --kubectl "$KUBECTL" 2>&1 || true)"
+LOGS_A="$(angku rayjob-logs "$JOB_A2" --kubectl "$KUBECTL" 2>&1 || true)"
 $KUBECTL delete rayjob "$JOB_A2" --wait=true
 
 step "run B: uninterrupted"
-JOB_B="$(mlops rayjob "$SPEC" --attempt 2 "${PVCS[@]}" --checkpoint-every 2 --submit --kubectl "$KUBECTL" | submitted)"
+JOB_B="$(angku rayjob "$SPEC" --attempt 2 "${PVCS[@]}" --checkpoint-every 2 --submit --kubectl "$KUBECTL" | submitted)"
 echo "RayJob $JOB_B"
 FINAL_B="$(wait_job "$JOB_B")"
-LOGS_B="$(mlops rayjob-logs "$JOB_B" --kubectl "$KUBECTL" 2>&1 || true)"
+LOGS_B="$(angku rayjob-logs "$JOB_B" --kubectl "$KUBECTL" 2>&1 || true)"
 UI_JOBS="$("$PY" - "$ART" "$KUBECTL" <<'EOF'
 import sys
 from mlops.adapters.local_artifacts import LocalArtifactStore
@@ -205,5 +205,5 @@ sys.exit(0 if all(ok for _, ok, _ in results) else 1)
 EOF
 echo
 echo "jobStatus values seen: $(sort -u "$STATUSES" | tr '\n' ' ')"
-echo "browse: mlops ui --artifacts $ART --kubectl \"$KUBECTL\""
+echo "browse: angku ui --artifacts $ART --kubectl \"$KUBECTL\""
 exit $rc

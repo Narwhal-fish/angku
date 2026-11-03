@@ -96,7 +96,7 @@ def overview_rows(
     if s.resumes and manifest is not None:
         rows.append(("resumed", ", ".join(f"after epoch {p.epoch}" for p in manifest.resumes)))
     if s.resumable:
-        rows.append(("resumable", f"yes: mlops resume {s.run_id} --artifacts <DIR>"))
+        rows.append(("resumable", f"yes: angku resume {s.run_id} --artifacts <DIR>"))
     if s.best is not None:
         b = s.best
         rows.append(

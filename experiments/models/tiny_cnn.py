@@ -19,7 +19,7 @@ class TinyCNNParams(Params):
     hidden: int = Field(default=8, gt=0)
     spatial_dims: int = Field(default=3, ge=1, le=3)
     # Element-wise dropout after the hidden activation. 0 (default) adds no layer at all, so the
-    # state_dict keys and existing runs are unchanged; > 0 is what `mlops predict --mc-samples` needs.
+    # state_dict keys and existing runs are unchanged; > 0 is what `angku predict --mc-samples` needs.
     dropout: float = Field(default=0.0, ge=0.0, lt=1.0)
 
 

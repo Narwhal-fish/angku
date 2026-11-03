@@ -8,7 +8,7 @@
 #
 # The PVs are host directories (.kind/artifacts, .kind/ray-storage) mounted into the kind node,
 # so the bundles a RayJob writes are readable on this machine:
-#   mlops ui --artifacts .kind/artifacts --kubectl "kubectl --context kind-mlops"
+#   angku ui --artifacts .kind/artifacts --kubectl "kubectl --context kind-mlops"
 # A single kind node stands in for RWX storage; it says nothing about RWX across real nodes.
 set -euo pipefail
 

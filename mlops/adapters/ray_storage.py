@@ -1,4 +1,4 @@
-"""Ray storage on a local or mounted filesystem, for ``mlops gc``. Plain pathlib: no ray import.
+"""Ray storage on a local or mounted filesystem, for ``angku gc``. Plain pathlib: no ray import.
 
 ``mount`` replaces the recorded ``storage_path`` when the same storage is mounted somewhere else
 on this machine (a KubeRay pod writes ``/ray-storage``; on the kind host it is

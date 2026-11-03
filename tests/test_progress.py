@@ -11,7 +11,7 @@ Ray runs both get it without touching the runner:
 
 A run is RUNNING when it has no manifest and its progress is ``running`` and fresher than
 ``STALE_AFTER``; a killed run goes stale and lists as INTERRUPTED / INCOMPLETE as before. A RUNNING
-run is never resumable: ``mlops resume`` refuses it, so two processes never write one run.
+run is never resumable: ``angku resume`` refuses it, so two processes never write one run.
 """
 
 from __future__ import annotations

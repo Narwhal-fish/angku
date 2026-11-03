@@ -1,7 +1,7 @@
 """scripts/kind-up.sh, kind-down.sh, kind-verify.sh: the KubeRay path checked on a local kind cluster.
 
 Running them needs Docker and pulls GBs, so tests only check them statically: they parse, the
-pins they share agree, every `mlops` command line they run is accepted by the real parser,
+pins they share agree, every `angku` command line they run is accepted by the real parser,
 and the state they write stays out of git and out of the image.
 """
 
@@ -87,12 +87,12 @@ def test_image_is_built_through_the_clean_tree_check():
         ["ui", "--artifacts", ".kind/artifacts", "--kubectl", "k"],
     ],
 )
-def test_mlops_command_lines_of_the_verify_script_parse(argv):
+def test_angku_command_lines_of_the_verify_script_parse(argv):
     build_parser().parse_args(argv)
 
 
-def test_every_mlops_subcommand_used_is_one_of_those():
-    used = set(re.findall(r"\bmlops (rayjob-status|rayjob-logs|rayjob|list|ui)\b", SCRIPTS["kind-verify.sh"]))
+def test_every_angku_subcommand_used_is_one_of_those():
+    used = set(re.findall(r"\bangku (rayjob-status|rayjob-logs|rayjob|list|ui)\b", SCRIPTS["kind-verify.sh"]))
     assert used <= {"rayjob", "rayjob-status", "rayjob-logs", "list", "ui"} and "rayjob" in used
 
 

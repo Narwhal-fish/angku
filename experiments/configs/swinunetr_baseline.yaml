@@ -20,7 +20,7 @@ dataset:
   version: v1
   # Content hash of the 41 training images + labels of the public MSD Task09_Spleen.tar
   # (sha256 dfeba347daae4fb08c38f4d243ab606b28b91b206ffc445ec55c35489fa65e60), as printed by
-  # mlops snapshot <this yaml> --data-root DIR. Other data under that name -> DataError.
+  # angku snapshot <this yaml> --data-root DIR. Other data under that name -> DataError.
   snapshot: sha256:86d9218e8ef9db4c78cf9db32fe8cda1215bf0a223c664766726afb10d1cdc77
 
 # Validated by experiments/datasets/msd_spleen.py (SpleenPreprocessing). Every field is

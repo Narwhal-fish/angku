@@ -19,14 +19,14 @@ dev = [
     "pytest>=8.0",
     "mlflow>=3.0",  # so the MLflow tracker tests run on the dev box
     "ray[train]>=2.40",  # so the Ray launcher tests run on the dev box
-    "textual>=8.0",  # so the `mlops ui` tests run on the dev box
+    "textual>=8.0",  # so the `angku ui` tests run on the dev box
     "ruff==0.17.0",  # pinned: CI runs the same version, a new release must not fail old code
 ]
 # Optional tracking backends. The core never imports them at module import time.
 tracking = [
     "mlflow>=3.0",
 ]
-# `mlops ui`: terminal browser over an artifact root.
+# `angku ui`: terminal browser over an artifact root.
 tui = [
     "textual>=8.0",
 ]
@@ -42,7 +42,7 @@ medical = [
 ]
 
 [project.scripts]
-mlops = "mlops.cli:main"
+angku = "mlops.cli:main"
 
 [build-system]
 requires = ["hatchling"]

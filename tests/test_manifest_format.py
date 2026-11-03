@@ -50,7 +50,7 @@ def test_newer_version_says_upgrade_even_with_fields_this_code_does_not_know():
         parse_manifest(raw)
     assert e.value.version == FORMAT_VERSION + 1 and e.value.known == FORMAT_VERSION
     msg = str(e.value)
-    assert "newer mlops" in msg and "upgrade mlops" in msg and f"format {FORMAT_VERSION + 1}" in msg
+    assert "newer angku" in msg and "upgrade angku" in msg and f"format {FORMAT_VERSION + 1}" in msg
     assert isinstance(e.value, ValueError) and isinstance(e.value, DomainError)
 
 
@@ -137,7 +137,7 @@ def test_list_shows_a_newer_manifest_as_unreadable_with_the_reason(tmp_path):
     store, run_id = _local_run(tmp_path)
     _newer_manifest(store, run_id)
     (s,) = list_runs(store)
-    assert s.status == "UNREADABLE" and "upgrade mlops" in s.error
+    assert s.status == "UNREADABLE" and "upgrade angku" in s.error
 
 
 def _cli_commands(art, a, b):
@@ -159,14 +159,14 @@ def test_cli_exits_2_and_says_upgrade_on_a_newer_manifest(tmp_path, capsys, i):
     cmd = _cli_commands(str(tmp_path), a, b)[i]
     assert main(cmd) == 2, cmd
     err = capsys.readouterr().err
-    assert "upgrade mlops" in err and "Traceback" not in err
+    assert "upgrade angku" in err and "Traceback" not in err
 
 
 def test_cli_list_and_gc_keep_a_newer_run(tmp_path, capsys):
     store, run_id = _local_run(tmp_path)
     _newer_manifest(store, run_id)
     assert main(["list", "--artifacts", str(tmp_path)]) == 0
-    assert "upgrade mlops" in capsys.readouterr().out
+    assert "upgrade angku" in capsys.readouterr().out
     assert main(["gc", "--artifacts", str(tmp_path), "--apply"]) == 0
     assert MANIFEST in store.list(run_id)
 

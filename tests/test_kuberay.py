@@ -65,11 +65,11 @@ def test_render_produces_configmap_and_rayjob(spec):
     assert job["metadata"]["labels"]["mlops.io/experiment"] == "swinunetr-baseline"
     assert cm["metadata"]["name"] == job["metadata"]["name"]
 
-    # the spec rides along verbatim as JSON (a YAML subset, so `mlops run` reads it as-is)
+    # the spec rides along verbatim as JSON (a YAML subset, so `angku run` reads it as-is)
     assert ExperimentSpec.model_validate_json(cm["data"]["experiment.json"]) == spec
 
     entry = job["spec"]["entrypoint"]
-    assert entry.startswith("mlops run /etc/mlops/experiment.json")
+    assert entry.startswith("angku run /etc/mlops/experiment.json")
     assert "--launcher ray" in entry and "--attempt 1" in entry and "--artifacts /artifacts" in entry
 
 
@@ -381,7 +381,7 @@ def test_checkpoint_every_must_be_positive(spec):
         _resumable(spec, checkpoint_every=0)
 
 
-def test_resume_job_runs_mlops_resume_for_the_same_run(spec):
+def test_resume_job_runs_angku_resume_for_the_same_run(spec):
     (_, fresh), (job,) = (
         _resumable(spec, attempt=2, checkpoint_every=5),
         _resumable(spec, attempt=2, resume=True),
@@ -397,7 +397,7 @@ def test_resume_job_runs_mlops_resume_for_the_same_run(spec):
     # one selectable label ties every job of a run together (annotations cannot be selected)
     assert job["metadata"]["labels"]["mlops.io/run"] == fresh["metadata"]["labels"]["mlops.io/run"] == rid[:32]
     entry = job["spec"]["entrypoint"]
-    assert entry.startswith(f"mlops resume {rid} --artifacts /artifacts")
+    assert entry.startswith(f"angku resume {rid} --artifacts /artifacts")
     assert "--data-root /data" in entry and "--mlflow-uri" not in entry
     # spec.json and launch.json (storage path, interval, attempt) come from the artifacts PVC
     assert "--checkpoint-every" not in entry and "--ray-storage" not in entry
@@ -419,13 +419,13 @@ def test_resume_job_can_change_the_checkpoint_interval(spec):
 
 
 @pytest.mark.parametrize("mode", [{"checkpoint_every": 3}, {"resume": True, "checkpoint_every": 3}])
-def test_entrypoint_is_accepted_by_the_mlops_cli(spec, mode):
+def test_entrypoint_is_accepted_by_the_angku_cli(spec, mode):
     # The in-cluster command must parse with the very CLI it calls: no flag drift.
     from mlops.cli import build_parser
 
     job = _by_kind(_resumable(spec, mlflow_uri="http://mlflow:5000", **mode), "RayJob")
     argv = job["spec"]["entrypoint"].split()
-    assert argv[0] == "mlops"
+    assert argv[0] == "angku"
     args = build_parser().parse_args(argv[1:])
     assert args.checkpoint_every == 3 and args.data_root == "/data" and args.artifacts == "/artifacts"
 
@@ -468,7 +468,7 @@ def test_active_rayjobs_reports_kubectl_failure():
         active_rayjobs("r" * 64, run=_FakeGet(returncode=1, stderr="Error from server (Forbidden): forbidden"))
 
 
-# --- for `mlops ui` (roadmap 13 phase D) ---
+# --- for `angku ui` (roadmap 13 phase D) ---
 
 
 def test_list_rayjobs_finds_every_job_we_rendered():

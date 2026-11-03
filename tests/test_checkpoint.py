@@ -2,7 +2,7 @@
 
 The promise: a run interrupted after epoch k and resumed from its checkpoint ends with the
 same run_id, history and weights (bit-exact) as the same run left alone, and its manifest
-says where it was resumed. ``mlops reproduce`` (a replay from scratch) is the honesty check.
+says where it was resumed. ``angku reproduce`` (a replay from scratch) is the honesty check.
 """
 
 from __future__ import annotations

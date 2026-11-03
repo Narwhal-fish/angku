@@ -1,8 +1,8 @@
-"""Use case: clean up an artifact root (``mlops gc``, roadmap 18).
+"""Use case: clean up an artifact root (``angku gc``, roadmap 18).
 
 ``plan_gc`` decides, ``apply_gc`` deletes; nothing is deleted without the second call, so the
 CLI's default is a dry run. Statuses come from ``list_runs``, so gc sees exactly what
-``mlops list`` / ``mlops ui`` show:
+``angku list`` / ``angku ui`` show:
 
     RUNNING       always kept (a live process is writing it); so is any run with a live
                   heartbeat, whatever its manifest says: resuming a FAILED run keeps the
@@ -215,7 +215,7 @@ def _item(s: RunSummary, reason: str, **kw: Any) -> GcItem:
 
 def _heartbeat(store: ArtifactStore, run_id: str, now: float) -> float | None:
     """Time of the last heartbeat when a live process is writing ``run_id``, else None. Checked
-    even when a manifest exists: ``mlops resume`` of a FAILED run keeps the FAILED manifest."""
+    even when a manifest exists: ``angku resume`` of a FAILED run keeps the FAILED manifest."""
     p = read_progress(store, run_id)
     return p.updated if p is not None and is_live(p, now=now) else None
 
@@ -315,7 +315,7 @@ def format_bytes(n: int | None) -> str:
 def gc_lines(
     plan: GcPlan, *, sizes: dict[str, int | None] | None = None, outcome: GcOutcome | None = None
 ) -> list[str]:
-    """What ``mlops gc`` prints: the plan (dry run) or, with ``outcome``, what was deleted.
+    """What ``angku gc`` prints: the plan (dry run) or, with ``outcome``, what was deleted.
     ``sizes`` = bytes per run_id of what the item frees (None/missing = unknown)."""
     sizes = sizes or {}
     done = plan.delete if outcome is None else outcome.deleted

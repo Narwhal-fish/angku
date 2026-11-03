@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Check the CUDA claims on this machine's GPU with tiny_cnn (roadmap 21, phase 1):
 #
-#   1. run A (attempt 1, gpu: 1) through `mlops run`
-#   2. `mlops reproduce A`: the replay on the same GPU must be bit-exact (torch.equal)
+#   1. run A (attempt 1, gpu: 1) through `angku run`
+#   2. `angku reproduce A`: the replay on the same GPU must be bit-exact (torch.equal)
 #   3. run B (attempt 2, checkpoint every 2 epochs) SIGKILLed from inside at epoch KILL_AT_EPOCH,
 #      after its epoch metrics were logged and before that epoch's checkpoint: a hard kill, no
-#      manifest; then `mlops resume B` continues from the last checkpoint (CUDA RNG restored)
+#      manifest; then `angku resume B` continues from the last checkpoint (CUDA RNG restored)
 #   4. checks: B resumed == A bit for bit (history + every tensor of model.pt); the runs ran on
 #      cuda; the probe recorded GPU / CUDA / cuDNN; deterministic algorithms on; the cross_entropy
 #      loss runs on CUDA under deterministic algorithms (nll_loss2d has no such kernel), gives the
@@ -27,7 +27,7 @@ cd "$root"
 PY="$root/.venv/bin/python"
 SPEC=.gpu/tiny_cnn_gpu.yaml
 ART=.gpu/artifacts
-mlops() { "$PY" -m mlops "$@"; }
+angku() { "$PY" -m mlops "$@"; }
 step() { echo; echo "== $*"; }
 
 step "GPU"
@@ -57,13 +57,13 @@ print(f"{path}: {epochs} epochs, gpu 1, commit {commit[:12]}")
 EOF
 
 step "run A (attempt 1)"
-mlops run "$SPEC" --artifacts "$ART" --tracker inmemory --attempt 1 --json > .gpu/run_a.json
+angku run "$SPEC" --artifacts "$ART" --tracker inmemory --attempt 1 --json > .gpu/run_a.json
 RUN_A="$("$PY" -c 'import json,sys; print(json.load(open(sys.argv[1]))["run_id"])' .gpu/run_a.json)"
 echo "run A = $RUN_A"
 
 step "reproduce A"
 set +e
-mlops reproduce "$RUN_A" --artifacts "$ART" --tracker inmemory --json > .gpu/reproduce_a.json
+angku reproduce "$RUN_A" --artifacts "$ART" --tracker inmemory --json > .gpu/reproduce_a.json
 REPRODUCE_EXIT=$?
 set -e
 echo "exit $REPRODUCE_EXIT"
@@ -115,10 +115,10 @@ from mlops.config import load_experiment_yaml
 from mlops.domain import compute_experiment_id, compute_run_id
 s = load_experiment_yaml(sys.argv[1]); print(compute_run_id(compute_experiment_id(s), s.resources, 2))' "$SPEC")"
 echo "run B = $RUN_B"
-mlops list --artifacts "$ART" --json > .gpu/list_killed.json
+angku list --artifacts "$ART" --json > .gpu/list_killed.json
 
 step "resume B"
-mlops resume "$RUN_B" --artifacts "$ART" --tracker inmemory --json > .gpu/resume_b.json
+angku resume "$RUN_B" --artifacts "$ART" --tracker inmemory --json > .gpu/resume_b.json
 
 step "checks"
 "$PY" - "$ART" "$RUN_A" "$RUN_B" "$REPRODUCE_EXIT" "$KILL_EXIT" "$KILL_AT_EPOCH" "$EPOCHS" <<'EOF'

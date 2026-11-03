@@ -7,7 +7,7 @@
 #      spleen data; the pod-style MLOPS_IMAGE_DIGEST is passed like KubeRay does
 #   3. every pin verifies inside the container: code.commit, environment.image_digest,
 #      dataset.snapshot all ok
-#   4. `mlops reproduce C` inside the container: bit-exact
+#   4. `angku reproduce C` inside the container: bit-exact
 #   5. (info, not a check) the same spec run on the host: same run_id; whether history and
 #      weights are identical to the container's (bit-exactness is only promised within one env)
 #
@@ -31,7 +31,7 @@ PY="$root/.venv/bin/python"
 BASELINE=experiments/configs/swinunetr_baseline.yaml
 OUT=.gpu/image
 SPEC=$OUT/swinunetr_image.yaml
-mlops() { "$PY" -m mlops "$@"; }
+angku() { "$PY" -m mlops "$@"; }
 step() { echo; echo "== $*"; }
 usage() { echo "usage: $0 REPO@sha256:DIGEST DATA_ROOT  (DATA_ROOT holds Task09_Spleen/; or set MLOPS_DATA_ROOT)" >&2; exit 2; }
 
@@ -84,21 +84,21 @@ print(f"{path}: {baseline} with {epochs} epochs, image {repo}@{digest[:19]}..., 
 EOF
 
 step "run C in the container"
-in_image mlops run /work/swinunetr_image.yaml --artifacts /work/container --data-root /data --tracker inmemory \
+in_image angku run /work/swinunetr_image.yaml --artifacts /work/container --data-root /data --tracker inmemory \
     --json | json_only > $OUT/run_c.json
 RUN_C="$("$PY" -c 'import json,sys; print(json.load(open(sys.argv[1]))["run_id"])' $OUT/run_c.json)"
 echo "run C = $RUN_C"
 
 step "reproduce C in the container"
 set +e
-in_image mlops reproduce "$RUN_C" --artifacts /work/container --data-root /data --tracker inmemory \
+in_image angku reproduce "$RUN_C" --artifacts /work/container --data-root /data --tracker inmemory \
     --json | json_only > $OUT/reproduce_c.json
 REPRODUCE_EXIT=$?
 set -e
 echo "exit $REPRODUCE_EXIT"
 
 step "run H on the host (same spec)"
-mlops run "$SPEC" --artifacts $OUT/host --data-root "$DATA_ROOT" --tracker inmemory --json > $OUT/run_h.json
+angku run "$SPEC" --artifacts $OUT/host --data-root "$DATA_ROOT" --tracker inmemory --json > $OUT/run_h.json
 RUN_H="$("$PY" -c 'import json,sys; print(json.load(open(sys.argv[1]))["run_id"])' $OUT/run_h.json)"
 echo "run H = $RUN_H"
 

@@ -14,11 +14,11 @@ rank reports a directory with its RNG state (rank 0 adds weights, optimizer, his
 Ray merges and persists under ``storage_path/<run name>``. ``resume=True`` launches the same
 run name on the same storage; Ray hands each rank the latest checkpoint via
 ``get_checkpoint()`` and the run continues bit-exactly. ``launch.json`` in the artifact store
-records the storage path so ``mlops resume`` can find it. On KubeRay that storage must be
+records the storage path so ``angku resume`` can find it. On KubeRay that storage must be
 shared by all pods (a PVC or object storage).
 
 On Kubernetes the same class runs inside a KubeRay ``RayJob`` whose entrypoint
-is ``mlops run --launcher ray``; see ``mlops.adapters.kuberay``.
+is ``angku run --launcher ray``; see ``mlops.adapters.kuberay``.
 
 Requires the ``distributed`` extra; the core never imports ray.
 """
@@ -316,7 +316,7 @@ class RayLauncher:
         assignment = resolve_split(spec, data)  # the ranks split the same cases the same way
         if checkpoint_every:
             assert artifacts is not None
-            # A killed driver never reaches save_bundle; `mlops resume` needs these to come back.
+            # A killed driver never reaches save_bundle; `angku resume` needs these to come back.
             save_spec(artifacts, run_id, spec)
             save_launch(
                 artifacts,

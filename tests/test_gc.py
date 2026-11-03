@@ -1,4 +1,4 @@
-"""``mlops gc`` (roadmap 18): clean an artifact root without touching anything that can still be
+"""``angku gc`` (roadmap 18): clean an artifact root without touching anything that can still be
 reproduced, resumed, or that a prediction result depends on."""
 
 from __future__ import annotations
@@ -267,7 +267,7 @@ def test_run_that_went_live_since_the_plan_is_skipped(spec, store):
     run_id = _failed(store, spec, checkpoint_every=1, keep_checkpoint=True)
     plan = plan_gc(store, GcPolicy(resumable=True), now=NOW)
     assert _ids(plan.delete) == [run_id]
-    _beat(store, run_id, updated=NOW)  # someone ran `mlops resume` meanwhile
+    _beat(store, run_id, updated=NOW)  # someone ran `angku resume` meanwhile
     outcome = apply_gc(store, plan, now=NOW)
     assert outcome.deleted == []
     assert [(i.run_id, why) for i, why in outcome.skipped] == [(run_id, "now live (started or resumed since the plan)")]

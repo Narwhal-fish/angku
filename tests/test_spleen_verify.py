@@ -1,7 +1,7 @@
 """scripts/spleen-verify.sh: SwinUNETR on the real MSD Task09 data on a real GPU (roadmap 21).
 
 CI has neither the GPU nor the 1.5 GB dataset, and the full job allows no skipped test, so the
-checks live in a script and the tests only check it statically: it parses, every `mlops` command
+checks live in a script and the tests only check it statically: it parses, every `angku` command
 it runs is accepted by the real parser, it checks the snapshot the baseline pins, and what it
 writes stays out of git and the image.
 """
@@ -36,12 +36,12 @@ def test_script_parses_and_is_strict():
         ["list", "--artifacts", "a", "--json"],
     ],
 )  # fmt: skip
-def test_mlops_command_lines_parse(argv):
+def test_angku_command_lines_parse(argv):
     build_parser().parse_args(argv)
 
 
-def test_every_mlops_command_in_the_script_is_covered():
-    lines = [ln.strip() for ln in SCRIPT.read_text().splitlines() if ln.strip().startswith("mlops ")]
+def test_every_angku_command_in_the_script_is_covered():
+    lines = [ln.strip() for ln in SCRIPT.read_text().splitlines() if ln.strip().startswith("angku ")]
     assert sorted({ln.split()[1] for ln in lines}) == ["list", "reproduce", "resume", "run", "snapshot"]
 
 

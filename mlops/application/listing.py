@@ -43,7 +43,7 @@ class RunSummary:
     final_metrics: dict[str, float] = field(default_factory=dict)
     workers: int | None = None
     resumes: int = 0
-    # A checkpoint exists and the run did not finish: `mlops resume` can continue it.
+    # A checkpoint exists and the run did not finish: `angku resume` can continue it.
     resumable: bool = False
     error: str | None = None
     best: BestRecord | None = None  # keep-best runs: which epoch best.pt holds

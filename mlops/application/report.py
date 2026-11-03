@@ -299,7 +299,7 @@ def _reproduce(b: Bundle) -> str:
     return (
         "## Reproduce\n\n"
         "Re-run this bundle and compare run_id, history and weights:\n\n"
-        f"    mlops reproduce {b.manifest.run_id} --artifacts <DIR>"
+        f"    angku reproduce {b.manifest.run_id} --artifacts <DIR>"
     )
 
 

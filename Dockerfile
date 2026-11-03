@@ -1,4 +1,4 @@
-# Training image for `mlops run` locally in a container and for KubeRay RayJobs.
+# Training image for `angku run` locally in a container and for KubeRay RayJobs.
 #
 # Build it with scripts/build-image.sh, never by hand: the script refuses a dirty checkout
 # and passes MLOPS_GIT_COMMIT, which is how a run inside this image verifies code.commit
@@ -31,7 +31,7 @@ RUN pip install --no-cache-dir uv \
     && uv pip install --python "$(command -v python)" --no-cache --torch-backend=${TORCH_BACKEND} \
         ".[tracking,distributed,medical]" "ray[train]==${RAY_VERSION}"
 
-# PYTHONPATH: the Ray job driver does not start in /app, and `mlops run` must still find
+# PYTHONPATH: the Ray job driver does not start in /app, and `angku run` must still find
 # the `experiments` package to discover models/losses/datasets.
 ENV PYTHONPATH=/app
 ENV MLOPS_GIT_COMMIT=${MLOPS_GIT_COMMIT}

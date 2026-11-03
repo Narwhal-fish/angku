@@ -10,7 +10,7 @@ environment it ran in, and the trained weights. Hand the bundle to someone else 
 re-run it and check that they get the same run, the same metrics and bit-identical weights.
 
 ```
-$ mlops reproduce a9253fa46953... --artifacts runs
+$ angku reproduce a9253fa46953... --artifacts runs
 tiny-cnn-smoke: REPRODUCED
   run_id         ok
   history        ok
@@ -58,7 +58,7 @@ Add only what you need:
 | Option | Gives you |
 |---|---|
 | `tracking` | Log runs to MLflow |
-| `tui` | `mlops ui`, the terminal browser for your runs |
+| `tui` | `angku ui`, the terminal browser for your runs |
 | `distributed` | Multi-worker training with Ray, locally or on Kubernetes |
 | `medical` | MONAI and NIfTI support for the medical imaging models and datasets |
 
@@ -69,7 +69,7 @@ For example `".[tracking,tui,distributed,medical]"` installs everything.
 The repository ships a tiny experiment on synthetic data that finishes in seconds on a laptop:
 
 ```bash
-mlops run experiments/configs/tiny_cnn_smoke.yaml --artifacts runs --tracker inmemory
+angku run experiments/configs/tiny_cnn_smoke.yaml --artifacts runs --tracker inmemory
 ```
 
 ```
@@ -88,18 +88,18 @@ Kubernetes.
 Now look at what you have:
 
 ```bash
-mlops list --artifacts runs                         # your runs, grouped by experiment
-mlops report <run_id> --artifacts runs              # a readable report of one run
-mlops reproduce <run_id> --artifacts runs --tracker inmemory
-mlops ui --artifacts runs                           # browse everything in the terminal
+angku list --artifacts runs                         # your runs, grouped by experiment
+angku report <run_id> --artifacts runs              # a readable report of one run
+angku reproduce <run_id> --artifacts runs --tracker inmemory
+angku ui --artifacts runs                           # browse everything in the terminal
 ```
 
-`<run_id>` can be copied from the output of `mlops run` or `mlops list`.
+`<run_id>` can be copied from the output of `angku run` or `angku list`.
 
 ## Browse your runs
 
 ```bash
-mlops ui --artifacts runs
+angku ui --artifacts runs
 ```
 
 A full-screen browser in your terminal: experiments, then their runs, then one run with tabs for
@@ -165,9 +165,9 @@ split:
 
 Cases are shuffled with a fixed seed (`seed: 0`, separate from the training seed), so the same
 YAML always gives the same split. Every run saves which case went where in `split.json`, and
-`mlops diff` lists the cases that moved between two runs.
+`angku diff` lists the cases that moved between two runs.
 
-To pin your data, run `mlops snapshot <yaml> --data-root DIR` and put the printed hash in the
+To pin your data, run `angku snapshot <yaml> --data-root DIR` and put the printed hash in the
 YAML's `dataset.snapshot`.
 
 ## What a run leaves behind
@@ -188,7 +188,7 @@ This folder is everything someone else needs to reproduce the run.
 ## Evaluate a trained model
 
 ```bash
-mlops predict <run_id> --artifacts runs
+angku predict <run_id> --artifacts runs
 ```
 
 This applies the run's model (the best epoch's weights if you used `--keep-best`) to the test
@@ -198,13 +198,13 @@ the same command again gives exactly the same numbers.
 
 Use `--part val` when the experiment has no test split, but keep in mind that validation data
 was used during training, so those numbers look better than they really are. Add
-`--save-predictions` to also keep each case's predicted labels. `mlops results --artifacts runs`
+`--save-predictions` to also keep each case's predicted labels. `angku results --artifacts runs`
 lists everything you have evaluated.
 
 ### Combine several models
 
 ```bash
-mlops ensemble <run_a> <run_b> <run_c> --artifacts runs --vote soft
+angku ensemble <run_a> <run_b> <run_c> --artifacts runs --vote soft
 ```
 
 `--vote soft` averages the models' probabilities; `--vote hard` lets each model vote for a label
@@ -216,7 +216,7 @@ experiment make a natural ensemble: they share the same test cases.
 ### How sure is the model?
 
 ```bash
-mlops predict <run_id> --artifacts runs --mc-samples 20
+angku predict <run_id> --artifacts runs --mc-samples 20
 ```
 
 For a model trained with dropout (for example `dropout: 0.2` in the `tiny_cnn` params), this
@@ -230,23 +230,23 @@ samples are seeded (`--mc-seed`, default 0), so the same command gives the same 
 
 | Command | What it does |
 |---|---|
-| `mlops run <yaml>` | Train one run |
-| `mlops resume <run_id>` | Continue an interrupted run from its last checkpoint |
-| `mlops reproduce <run_id>` | Re-run a finished run and check the result is the same |
-| `mlops list` | Your runs, grouped by experiment, and whether repeated runs agree |
-| `mlops report <run_id>` | Write the readable report of a run |
-| `mlops diff <run_a> <run_b>` | Explain why two runs differ |
-| `mlops predict <run_id>` | Evaluate a finished run's model on its test cases |
-| `mlops ensemble <run_id>...` | Combine several runs' predictions by voting |
-| `mlops results` | List your prediction results |
-| `mlops ui` | Browse your runs in the terminal |
-| `mlops id <yaml>` | Show an experiment's id without running it |
-| `mlops snapshot <yaml>` | Show the hash of your data, to put in the YAML |
-| `mlops rayjob <yaml>` | Run the experiment on a Kubernetes cluster |
-| `mlops rayjob-status <name>` | Check a job on the cluster |
-| `mlops rayjob-logs <name>` | Read a job's log (`-f` to follow) |
+| `angku run <yaml>` | Train one run |
+| `angku resume <run_id>` | Continue an interrupted run from its last checkpoint |
+| `angku reproduce <run_id>` | Re-run a finished run and check the result is the same |
+| `angku list` | Your runs, grouped by experiment, and whether repeated runs agree |
+| `angku report <run_id>` | Write the readable report of a run |
+| `angku diff <run_a> <run_b>` | Explain why two runs differ |
+| `angku predict <run_id>` | Evaluate a finished run's model on its test cases |
+| `angku ensemble <run_id>...` | Combine several runs' predictions by voting |
+| `angku results` | List your prediction results |
+| `angku ui` | Browse your runs in the terminal |
+| `angku id <yaml>` | Show an experiment's id without running it |
+| `angku snapshot <yaml>` | Show the hash of your data, to put in the YAML |
+| `angku rayjob <yaml>` | Run the experiment on a Kubernetes cluster |
+| `angku rayjob-status <name>` | Check a job on the cluster |
+| `angku rayjob-logs <name>` | Read a job's log (`-f` to follow) |
 
-Useful options for `mlops run`:
+Useful options for `angku run`:
 
 - `--checkpoint-every N` saves a checkpoint every N epochs so the run can be resumed.
 - `--keep-best val/dice/mean:max` keeps the weights of the best epoch.
@@ -254,11 +254,11 @@ Useful options for `mlops run`:
 - `--launcher ray` trains with several workers.
 - `--strict-env` refuses to start when the environment does not match the YAML.
 
-`mlops reproduce` re-runs a finished run with the same launcher it was trained with, so a run
+`angku reproduce` re-runs a finished run with the same launcher it was trained with, so a run
 trained with several Ray workers is replayed with the same number of workers. Add
 `--ray-address ADDR` to replay it on a Ray cluster instead of a local one.
 
-`mlops <command> --help` lists every option.
+`angku <command> --help` lists every option.
 
 ## Run on Kubernetes
 
@@ -274,12 +274,12 @@ cluster:
 2. Put that digest and your commit in the YAML. Then submit the job:
 
    ```bash
-   mlops rayjob my_experiment.yaml --artifacts-pvc my-artifacts --submit
+   angku rayjob my_experiment.yaml --artifacts-pvc my-artifacts --submit
    ```
 
 The job runs the same training as on your machine, and the bundle lands on the `my-artifacts`
 volume. Add `--checkpoint-every N --ray-storage-pvc my-ray-storage` to make the job resumable;
-if it is stopped, `--submit` prints the `mlops rayjob --resume` command that continues it.
+if it is stopped, `--submit` prints the `angku rayjob --resume` command that continues it.
 
 ### Try it on your laptop
 
@@ -289,7 +289,7 @@ With Docker, [kind](https://kind.sigs.k8s.io/) and kubectl you can run a small c
 ```bash
 scripts/kind-up.sh       # start a local cluster with KubeRay
 scripts/kind-verify.sh   # train on it, stop a job halfway, resume it, check the result
-mlops ui --artifacts .kind/artifacts --kubectl "kubectl --context kind-mlops"
+angku ui --artifacts .kind/artifacts --kubectl "kubectl --context kind-mlops"
 scripts/kind-down.sh     # remove the cluster when you are done
 ```
 

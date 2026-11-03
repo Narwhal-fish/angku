@@ -27,7 +27,7 @@ cases sorted by file name, the last ``num_val`` are validation.
 
 ``snapshot`` = sha256 over the sorted (relative path, sha256 of file) of every image and
 label ``load`` reads. Location-independent; files it does not serve (imagesTs, stray files)
-do not count. Pin the value ``mlops snapshot <yaml> --data-root DIR`` prints.
+do not count. Pin the value ``angku snapshot <yaml> --data-root DIR`` prints.
 """
 
 from __future__ import annotations

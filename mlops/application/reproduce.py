@@ -197,7 +197,7 @@ def _compare_states(a: dict[str, Any], b: dict[str, Any], atol: float, prefix: s
 
 
 def reproduce_lines(name: str, r: ReproduceReport) -> list[str]:
-    """What `mlops reproduce` prints (and the UI shows): verdict, per-check result, mismatches,
+    """What `angku reproduce` prints (and the UI shows): verdict, per-check result, mismatches,
     and the environment differences as the likely explanation."""
     out = [
         f"{name}: {'REPRODUCED' if r.ok else 'NOT REPRODUCED'}",

@@ -442,7 +442,7 @@ def _metric_cells(metrics: dict[str, float]) -> str:
 
 
 def prediction_lines(r: PredictionRecord) -> list[str]:
-    """What `mlops predict` / `mlops ensemble` print."""
+    """What `angku predict` / `angku ensemble` print."""
     n = f"{len(r.cases)} case{'s' if len(r.cases) != 1 else ''}"
     if r.kind == "ensemble":
         head = f"{r.name}: {_what(r)} of {len(r.members)} runs on {r.part} ({n})"
@@ -465,7 +465,7 @@ def prediction_lines(r: PredictionRecord) -> list[str]:
 
 
 def result_line(r: PredictionRecord) -> str:
-    """One line of `mlops results`."""
+    """One line of `angku results`."""
     what = f"{_what(r)} {r.part} ({len(r.cases)})"
     return f"{r.result_id[:12]}  {r.name}  {what}  {_members_line(r)}  {_metric_cells(r.metrics)}"
 

@@ -1,4 +1,4 @@
-"""`predict_run` / `mlops predict`: a finished run's model on one part of its data, as a
+"""`predict_run` / `angku predict`: a finished run's model on one part of its data, as a
 reproducible result next to the runs (roadmap 16, phase 2 of the split/predict/ensemble plan)."""
 
 from __future__ import annotations
