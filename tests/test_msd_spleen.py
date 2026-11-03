@@ -28,14 +28,14 @@ pytest.importorskip("monai")
 
 import numpy as np  # noqa: E402  (comes with the medical extra)
 
-from mlops.adapters.inmemory_tracker import InMemoryTracker  # noqa: E402
-from mlops.application import run_experiment  # noqa: E402
-from mlops.cli import main  # noqa: E402
-from mlops.config import load_experiment_yaml  # noqa: E402
-from mlops.domain.experiment import Dataset  # noqa: E402
-from mlops.domain.split import SplitAssignment  # noqa: E402
-from mlops.ports.data import DataError  # noqa: E402
-from mlops.registry import DATASETS, RegistryError, discover  # noqa: E402
+from angku.adapters.inmemory_tracker import InMemoryTracker  # noqa: E402
+from angku.application import run_experiment  # noqa: E402
+from angku.cli import main  # noqa: E402
+from angku.config import load_experiment_yaml  # noqa: E402
+from angku.domain.experiment import Dataset  # noqa: E402
+from angku.domain.split import SplitAssignment  # noqa: E402
+from angku.ports.data import DataError  # noqa: E402
+from angku.registry import DATASETS, RegistryError, discover  # noqa: E402
 
 ROOT = Path(__file__).parent.parent
 NAME = "msd-task09-spleen"
@@ -267,18 +267,18 @@ def test_cli_run_with_data_root(data_root, tmp_path, capsys):
 def test_cli_run_without_data_root_is_a_clean_error(tmp_path, capsys, monkeypatch):
     import yaml
 
-    monkeypatch.delenv("MLOPS_DATA_ROOT", raising=False)
+    monkeypatch.delenv("ANGKU_DATA_ROOT", raising=False)
     path = tmp_path / "spleen.yaml"
     path.write_text(yaml.safe_dump(json.loads(_spleen_spec(tmp_path).model_dump_json())))
     assert main(["run", str(path), "--tracker", "inmemory"]) == 2
     err = capsys.readouterr().err
-    assert "--data-root" in err and "MLOPS_DATA_ROOT" in err and "Traceback" not in err
+    assert "--data-root" in err and "ANGKU_DATA_ROOT" in err and "Traceback" not in err
 
 
 def test_cli_data_root_from_env(data_root, tmp_path, capsys, monkeypatch):
     import yaml
 
-    monkeypatch.setenv("MLOPS_DATA_ROOT", str(data_root))
+    monkeypatch.setenv("ANGKU_DATA_ROOT", str(data_root))
     path = tmp_path / "spleen.yaml"
     path.write_text(yaml.safe_dump(json.loads(_spleen_spec(tmp_path).model_dump_json())))
     assert main(["run", str(path), "--tracker", "inmemory"]) == 0
@@ -311,7 +311,7 @@ def test_full_volume_val_serves_whole_preprocessed_cases(provider):
 
 
 def test_full_volume_val_with_sliding_window_runs_end_to_end(provider, tmp_path):
-    from mlops.config import load_experiment_dict
+    from angku.config import load_experiment_dict
 
     spec = _spleen_spec(tmp_path)
     spec = load_experiment_dict(

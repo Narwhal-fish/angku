@@ -9,8 +9,8 @@ import pytest
 import yaml
 from pydantic import ValidationError
 
-from mlops.config import ConfigError, load_experiment_dict, load_experiment_yaml
-from mlops.domain import UnpinnedInputError, compute_experiment_id, compute_run_id
+from angku.config import ConfigError, load_experiment_dict, load_experiment_yaml
+from angku.domain import UnpinnedInputError, compute_experiment_id, compute_run_id
 
 EXAMPLE_YAML = Path(__file__).parent.parent / "experiments/configs/swinunetr_baseline.yaml"
 HEX64 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
@@ -79,7 +79,7 @@ def test_5_meta_does_not_affect_experiment_id(raw):
 def test_5b_labels_and_tracking_do_not_affect_experiment_id(raw):
     base = compute_experiment_id(load_experiment_dict(raw))
     changed = copy.deepcopy(raw)
-    changed["environment"]["image"] = "ghcr.io/example/mlops-train:9.9.9"
+    changed["environment"]["image"] = "ghcr.io/example/angku-train:9.9.9"
     changed["dataset"]["version"] = "v99"
     changed["tracking"]["uri"] = "http://elsewhere:5000"
     assert compute_experiment_id(load_experiment_dict(changed)) == base

@@ -23,16 +23,16 @@ from pathlib import Path
 import pytest
 import yaml
 
-from mlops.adapters.inmemory_artifacts import InMemoryArtifactStore
-from mlops.adapters.inmemory_tracker import InMemoryTracker
-from mlops.adapters.live_progress import LiveProgress
-from mlops.adapters.local_artifacts import LocalArtifactStore
-from mlops.application.bundle import CHECKPOINT, MANIFEST, SPEC, save_spec
-from mlops.application.listing import list_runs
-from mlops.application.progress import PROGRESS, STALE_AFTER, Progress, is_live, load_progress, save_progress
-from mlops.cli import main
-from mlops.config import load_experiment_yaml
-from mlops.domain import compute_experiment_id, compute_run_id
+from angku.adapters.inmemory_artifacts import InMemoryArtifactStore
+from angku.adapters.inmemory_tracker import InMemoryTracker
+from angku.adapters.live_progress import LiveProgress
+from angku.adapters.local_artifacts import LocalArtifactStore
+from angku.application.bundle import CHECKPOINT, MANIFEST, SPEC, save_spec
+from angku.application.listing import list_runs
+from angku.application.progress import PROGRESS, STALE_AFTER, Progress, is_live, load_progress, save_progress
+from angku.cli import main
+from angku.config import load_experiment_yaml
+from angku.domain import compute_experiment_id, compute_run_id
 
 ROOT = Path(__file__).parent.parent
 SMOKE = ROOT / "experiments/configs/tiny_cnn_smoke.yaml"
@@ -163,7 +163,7 @@ def test_manifest_wins_over_progress(tmp_path):
 def test_cli_run_writes_progress_while_training(tmp_path, monkeypatch):
     """During training the run dir holds spec.json + a running progress.json."""
     seen = []
-    from mlops.adapters import inmemory_tracker
+    from angku.adapters import inmemory_tracker
 
     real = inmemory_tracker.InMemoryTracker.log_metrics
 

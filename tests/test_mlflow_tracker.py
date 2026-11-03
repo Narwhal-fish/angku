@@ -16,12 +16,12 @@ import pytest
 pytest.importorskip("mlflow")
 from mlflow import MlflowClient  # noqa: E402
 
-from mlops.adapters.mlflow_tracker import MlflowTracker  # noqa: E402
-from mlops.adapters.synthetic_data import SyntheticBlobs  # noqa: E402
-from mlops.application import run_experiment  # noqa: E402
-from mlops.config import load_experiment_dict, load_experiment_yaml  # noqa: E402
-from mlops.ports.tracking import TrackerError  # noqa: E402
-from mlops.registry import discover  # noqa: E402
+from angku.adapters.mlflow_tracker import MlflowTracker  # noqa: E402
+from angku.adapters.synthetic_data import SyntheticBlobs  # noqa: E402
+from angku.application import run_experiment  # noqa: E402
+from angku.config import load_experiment_dict, load_experiment_yaml  # noqa: E402
+from angku.ports.tracking import TrackerError  # noqa: E402
+from angku.registry import discover  # noqa: E402
 
 CONFIGS = Path(__file__).parent.parent / "experiments/configs"
 
@@ -66,7 +66,7 @@ def uri(fresh_db):
 def _find(client: MlflowClient, experiment_name: str, run_id: str):
     exp = client.get_experiment_by_name(experiment_name)
     assert exp is not None, f"experiment {experiment_name!r} not created"
-    runs = client.search_runs([exp.experiment_id], filter_string=f"tags.mlops.run_id = '{run_id}'")
+    runs = client.search_runs([exp.experiment_id], filter_string=f"tags.angku.run_id = '{run_id}'")
     assert len(runs) == 1
     return runs[0]
 
@@ -80,9 +80,9 @@ def test_run_lifecycle_lands_in_mlflow(spec, uri):
 
     run = _find(MlflowClient(uri), spec.tracking.experiment_name, "r" * 64)
     assert run.info.status == "FINISHED"
-    assert run.data.tags["mlops.experiment_id"] == "e" * 64
-    assert run.data.tags["mlops.run_id"] == "r" * 64
-    assert run.data.tags["mlops.name"] == spec.meta.name
+    assert run.data.tags["angku.experiment_id"] == "e" * 64
+    assert run.data.tags["angku.run_id"] == "r" * 64
+    assert run.data.tags["angku.name"] == spec.meta.name
     # fingerprint flattened into params so the UI can filter/compare on them
     assert run.data.params["model.name"] == "tiny_cnn"
     assert run.data.params["model.params.hidden"] == "4"
@@ -160,7 +160,7 @@ def test_end_to_end_through_the_runner(spec, uri):
 
 def test_importing_the_core_does_not_import_mlflow():
     code = (
-        "import sys, mlops.application, mlops.adapters, mlops.adapters.inmemory_tracker;"
+        "import sys, angku.application, angku.adapters, angku.adapters.inmemory_tracker;"
         "assert 'mlflow' not in sys.modules, 'mlflow leaked into the core import graph'"
     )
     subprocess.run([sys.executable, "-c", code], check=True, cwd=Path(__file__).parent.parent)

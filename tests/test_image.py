@@ -1,7 +1,7 @@
 """The training image: Dockerfile + scripts/build-image.sh.
 
 In-cluster there is no git repo, so ``LocalEnvironmentProbe`` verifies code.commit against
-``MLOPS_GIT_COMMIT`` baked into the image. That only means something if the image is built
+``ANGKU_GIT_COMMIT`` baked into the image. That only means something if the image is built
 from a clean checkout of exactly that commit: the build script refuses otherwise.
 
 The script is exercised in a throwaway git repo with a fake ``docker`` on PATH; nothing is
@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from mlops.adapters.kuberay import RAY_VERSION
+from angku.adapters.kuberay import RAY_VERSION
 
 ROOT = Path(__file__).parent.parent
 DOCKERFILE = (ROOT / "Dockerfile").read_text() if (ROOT / "Dockerfile").exists() else ""
@@ -36,14 +36,14 @@ def test_ray_in_the_image_matches_the_rayjob():
 
 
 def test_commit_is_required_validated_and_baked_in():
-    assert re.search(r"^ARG MLOPS_GIT_COMMIT$", DOCKERFILE, re.M)
+    assert re.search(r"^ARG ANGKU_GIT_COMMIT$", DOCKERFILE, re.M)
     assert "^[0-9a-f]{40}$" in DOCKERFILE
-    assert re.search(r"^ENV .*MLOPS_GIT_COMMIT=\$\{MLOPS_GIT_COMMIT\}", DOCKERFILE, re.M)
+    assert re.search(r"^ENV .*ANGKU_GIT_COMMIT=\$\{ANGKU_GIT_COMMIT\}", DOCKERFILE, re.M)
 
 
 def test_cuda_allocator_default_is_the_cli_one():
     # Ray workers on other nodes do not inherit the driver's environment: the image sets it for every pod.
-    from mlops.cli import CUDA_ALLOC_CONF, CUDA_ALLOC_DEFAULT
+    from angku.cli import CUDA_ALLOC_CONF, CUDA_ALLOC_DEFAULT
 
     assert re.search(rf"^ENV {CUDA_ALLOC_CONF}={re.escape(CUDA_ALLOC_DEFAULT)}$", DOCKERFILE, re.M)
 
@@ -52,7 +52,7 @@ def test_experiments_are_importable_from_any_working_directory():
     # The Ray job driver does not start in /app; `discover("experiments")` must still work.
     assert re.search(r"^ENV .*PYTHONPATH=/app", DOCKERFILE, re.M)
     assert re.search(r"^COPY .*experiments \./experiments$", DOCKERFILE, re.M)
-    assert re.search(r"^COPY .*mlops \./mlops$", DOCKERFILE, re.M)
+    assert re.search(r"^COPY .*angku \./angku$", DOCKERFILE, re.M)
 
 
 def test_gpu_torch_wheel_is_chosen_explicitly():
@@ -74,7 +74,7 @@ def test_all_extras_the_cluster_needs_are_installed():
 
 def test_dockerignore_keeps_git_and_local_state_out():
     ignored = (ROOT / ".dockerignore").read_text().split()
-    # no .git in the image: code is verified via MLOPS_GIT_COMMIT, not a repo that could drift
+    # no .git in the image: code is verified via ANGKU_GIT_COMMIT, not a repo that could drift
     for entry in (".git", ".venv", "artifacts", ".kind", "tests", "**/__pycache__"):
         assert entry in ignored, entry
 
@@ -86,10 +86,10 @@ def test_dockerignore_keeps_git_and_local_state_out():
 def repo(tmp_path) -> Path:
     """A minimal clean checkout with the real script and Dockerfile."""
     r = tmp_path / "repo"
-    (r / "mlops").mkdir(parents=True)
+    (r / "angku").mkdir(parents=True)
     (r / "experiments" / "configs").mkdir(parents=True)
     (r / "scripts").mkdir()
-    (r / "mlops" / "x.py").write_text("x = 1\n")
+    (r / "angku" / "x.py").write_text("x = 1\n")
     (r / "experiments" / "configs" / "a.yaml").write_text("a: 1\n")
     (r / "pyproject.toml").write_text("[project]\nname='m'\n")
     shutil.copy(ROOT / "Dockerfile", r / "Dockerfile")
@@ -142,7 +142,7 @@ def test_clean_checkout_builds_with_the_commit_baked_in(repo, docker):
     assert r.returncode == 0, r.stderr
     (call,) = _calls(docker)
     assert call.startswith("build ")
-    assert f"--build-arg MLOPS_GIT_COMMIT={_head(repo)}" in call
+    assert f"--build-arg ANGKU_GIT_COMMIT={_head(repo)}" in call
     assert "-t ghcr.io/x/train:0.2" in call and call.endswith(str(repo))  # context = repo root, any cwd
     assert f"code.commit: {_head(repo)}" in r.stdout
     assert "--push" in r.stdout  # explains that the digest only exists after a push
@@ -154,10 +154,10 @@ def test_cpu_build_picks_the_cpu_base_and_wheel(repo, docker):
     assert r.returncode == 0, r.stderr
     build, _, _ = _calls(docker)
     assert "--build-arg RAY_FLAVOR= " in build and "--build-arg TORCH_BACKEND=cpu" in build
-    assert f"--build-arg MLOPS_GIT_COMMIT={_head(repo)}" in build
+    assert f"--build-arg ANGKU_GIT_COMMIT={_head(repo)}" in build
 
 
-@pytest.mark.parametrize("path", ["mlops/x.py", "pyproject.toml", "Dockerfile"])
+@pytest.mark.parametrize("path", ["angku/x.py", "pyproject.toml", "Dockerfile"])
 def test_uncommitted_code_is_refused(repo, docker, path):
     (repo / path).write_text((repo / path).read_text() + "\n# local edit\n")
     r = _build(repo, docker, "ghcr.io/x/train:0.2")

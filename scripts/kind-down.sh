@@ -3,8 +3,8 @@
 # .kind/ (the bundles and Ray checkpoints the cluster wrote) stays on disk; delete it yourself.
 set -euo pipefail
 
-CLUSTER="${MLOPS_KIND_CLUSTER:-mlops}"
-REGISTRY=mlops-registry
+CLUSTER="${ANGKU_KIND_CLUSTER:-angku}"
+REGISTRY=angku-registry
 
 kind delete cluster --name "$CLUSTER"
 docker rm -f "$REGISTRY" >/dev/null 2>&1 || true

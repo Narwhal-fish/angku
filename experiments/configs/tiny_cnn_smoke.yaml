@@ -11,7 +11,7 @@ code:
   commit: 0123456789abcdef0123456789abcdef01234567
 
 environment:
-  image: ghcr.io/example/mlops-train:0.1.0
+  image: ghcr.io/example/angku-train:0.1.0
   image_digest: sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
 
 dataset:

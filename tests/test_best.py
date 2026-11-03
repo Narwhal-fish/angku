@@ -16,13 +16,13 @@ import pytest
 import torch
 from pydantic import ValidationError
 
-from mlops.adapters.inmemory_artifacts import InMemoryArtifactStore
-from mlops.adapters.inmemory_tracker import InMemoryTracker
-from mlops.application import RunnerError, run_experiment
-from mlops.application.bundle import BEST, CHECKPOINT, MODEL, load_bundle
-from mlops.application.report import render_report
-from mlops.domain.best import BestCriterion, best_epoch
-from mlops.registry import discover
+from angku.adapters.inmemory_artifacts import InMemoryArtifactStore
+from angku.adapters.inmemory_tracker import InMemoryTracker
+from angku.application import RunnerError, run_experiment
+from angku.application.bundle import BEST, CHECKPOINT, MODEL, load_bundle
+from angku.application.report import render_report
+from angku.domain.best import BestCriterion, best_epoch
+from angku.registry import discover
 from tests.test_checkpoint import KilledStore, _data, _interrupt, spec  # noqa: F401 - fixture
 
 
@@ -191,7 +191,7 @@ def _best_run(spec, store):
 
 
 def test_reproduce_checks_best_pt(spec):
-    from mlops.application.reproduce import reproduce_run
+    from angku.application.reproduce import reproduce_run
 
     store = InMemoryArtifactStore()
     run_id = _best_run(spec, store)
@@ -212,7 +212,7 @@ def test_reproduce_checks_best_pt(spec):
 def test_cli_keep_best(tmp_path, capsys):
     import json
 
-    from mlops.cli import main
+    from angku.cli import main
     from tests.test_cli import _write_yaml
 
     art = tmp_path / "artifacts"
@@ -229,7 +229,7 @@ def test_cli_keep_best(tmp_path, capsys):
 
 
 def test_cli_keep_best_bad_value_exits_2(capsys):
-    from mlops.cli import main
+    from angku.cli import main
     from tests.test_cli import SMOKE
 
     assert main(["run", str(SMOKE), "--tracker", "inmemory", "--keep-best", "val/loss"]) == 2
@@ -240,7 +240,7 @@ def test_cli_keep_best_bad_value_exits_2(capsys):
 def test_rayjob_passes_keep_best_to_the_in_cluster_run(capsys):
     import json
 
-    from mlops.cli import main
+    from angku.cli import main
     from tests.test_cli import BASELINE
 
     assert main(["rayjob", str(BASELINE), "--data-pvc", "msd", "--keep-best", "val/dice/mean:max"]) == 0

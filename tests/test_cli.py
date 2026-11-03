@@ -12,11 +12,11 @@ from pathlib import Path
 import pytest
 import yaml
 
-from mlops.application.bundle import MANIFEST, MODEL, SPEC
-from mlops.application.report import REPORT
-from mlops.cli import CUDA_ALLOC_CONF, main
-from mlops.config import load_experiment_yaml
-from mlops.domain import RunManifest, compute_experiment_id, compute_run_id
+from angku.application.bundle import MANIFEST, MODEL, SPEC
+from angku.application.report import REPORT
+from angku.cli import CUDA_ALLOC_CONF, main
+from angku.config import load_experiment_yaml
+from angku.domain import RunManifest, compute_experiment_id, compute_run_id
 
 ROOT = Path(__file__).parent.parent
 SMOKE = ROOT / "experiments/configs/tiny_cnn_smoke.yaml"
@@ -100,7 +100,7 @@ def test_run_uses_mlflow_when_spec_says_so(tmp_path, capsys):
     payload = json.loads(capsys.readouterr().out)
     client = MlflowClient(uri)
     exp = client.get_experiment_by_name("smoke")
-    runs = client.search_runs([exp.experiment_id], f"tags.mlops.run_id = '{payload['run_id']}'")
+    runs = client.search_runs([exp.experiment_id], f"tags.angku.run_id = '{payload['run_id']}'")
     assert len(runs) == 1 and runs[0].info.status == "FINISHED"
 
 
@@ -143,7 +143,7 @@ def test_training_failure_exits_1_and_keeps_failed_bundle(tmp_path, capsys):
 
 
 def test_console_entry_point():
-    r = subprocess.run([sys.executable, "-m", "mlops", "id", str(SMOKE)], capture_output=True, text=True, cwd=ROOT)
+    r = subprocess.run([sys.executable, "-m", "angku", "id", str(SMOKE)], capture_output=True, text=True, cwd=ROOT)
     assert r.returncode == 0, r.stderr
     assert r.stdout.strip() == compute_experiment_id(load_experiment_yaml(SMOKE))
 
@@ -209,7 +209,7 @@ def test_rayjob_renders_json_list(capsys):
 
 
 def test_rayjob_submit_goes_through_kubectl(capsys, monkeypatch):
-    import mlops.cli as cli
+    import angku.cli as cli
 
     calls = []
 
@@ -225,7 +225,7 @@ def test_rayjob_submit_goes_through_kubectl(capsys, monkeypatch):
     assert main(["rayjob", str(BASELINE), "--data-pvc", "msd", "--submit", "--kubectl", "kubectl --context dev"]) == 0
     assert calls == [["kubectl", "--context", "dev", "apply", "-n", "default", "-f", "-"]]
     out = capsys.readouterr().out
-    assert out.strip().startswith("submitted RayJob mlops-")
+    assert out.strip().startswith("submitted RayJob angku-")
 
 
 def test_rayjob_unpinned_spec_exits_2(tmp_path, capsys):
@@ -366,8 +366,8 @@ def test_reproduce_multi_worker_run_with_the_local_launcher_exits_2(spec_two_wor
 
 
 def test_ui_reproduce_picks_the_launcher_like_the_cli(finished_run, capsys, fake_ray):
-    from mlops.adapters.local_artifacts import LocalArtifactStore
-    from mlops.cli import _ui_actions, build_parser
+    from angku.adapters.local_artifacts import LocalArtifactStore
+    from angku.cli import _ui_actions, build_parser
 
     art, run_id = finished_run
     _set_recorded_launcher(art, run_id, "ray")
@@ -384,9 +384,9 @@ def test_ui_reproduce_picks_the_launcher_like_the_cli(finished_run, capsys, fake
 @pytest.fixture
 def spec_two_workers_bundle(tmp_path):
     """A FINISHED 2-worker bundle (written directly: training it needs Ray)."""
-    from mlops.adapters.local_artifacts import LocalArtifactStore
-    from mlops.application.bundle import save_bundle
-    from mlops.config import load_experiment_dict
+    from angku.adapters.local_artifacts import LocalArtifactStore
+    from angku.application.bundle import save_bundle
+    from angku.config import load_experiment_dict
 
     raw = yaml.safe_load(SMOKE.read_text())
     raw["training"]["batch_size"] = 4
@@ -452,7 +452,7 @@ def test_report_unknown_run_id_exits_2(tmp_path, capsys):
 @pytest.fixture
 def probe(monkeypatch):
     """Swap the CLI's probe for a FixedProbe; returns a setter."""
-    import mlops.cli as cli
+    import angku.cli as cli
     from tests.test_environment import FixedProbe
 
     def use(**kw):
@@ -475,7 +475,7 @@ def test_run_warns_when_environment_is_not_verified(tmp_path, capsys, probe):
     probe(commit_ok=False)
     assert main(["run", str(SMOKE), "--tracker", "inmemory"]) == 0
     err = capsys.readouterr().err
-    assert "code.commit" in err and "mismatch" in err and "mlops/x.py" in err
+    assert "code.commit" in err and "mismatch" in err and "angku/x.py" in err
 
 
 def test_strict_env_refuses_an_unverified_environment(tmp_path, capsys, probe):
@@ -489,7 +489,7 @@ def test_strict_env_refuses_an_unverified_environment(tmp_path, capsys, probe):
 
 
 def test_strict_env_runs_when_everything_verifies(tmp_path, capsys, probe, monkeypatch):
-    import mlops.cli as cli
+    import angku.cli as cli
     from tests.test_data_snapshot import HashedBlobs
 
     spec = load_experiment_yaml(SMOKE)
@@ -504,7 +504,7 @@ def test_strict_env_runs_when_everything_verifies(tmp_path, capsys, probe, monke
 
 def _killed_run(tmp_path, capsys, monkeypatch, *, epochs=3, fail_at=3):
     """`angku run --checkpoint-every 1` that dies at epoch ``fail_at``; returns (art, run_id)."""
-    import mlops.cli as cli
+    import angku.cli as cli
     from tests.test_checkpoint import FlakyTracker
 
     yml = _write_yaml(tmp_path / "e.yaml", **{"training.epochs": epochs})
@@ -518,7 +518,7 @@ def _killed_run(tmp_path, capsys, monkeypatch, *, epochs=3, fail_at=3):
 
 
 def test_run_checkpoint_every_writes_checkpoint(tmp_path, capsys):
-    from mlops.application.bundle import CHECKPOINT
+    from angku.application.bundle import CHECKPOINT
 
     art = tmp_path / "artifacts"
     yml = _write_yaml(tmp_path / "e.yaml", **{"training.epochs": 2})
@@ -532,7 +532,7 @@ def test_run_checkpoint_every_writes_checkpoint(tmp_path, capsys):
 
 
 def test_run_keep_checkpoint(tmp_path, capsys):
-    from mlops.application.bundle import CHECKPOINT
+    from angku.application.bundle import CHECKPOINT
 
     art = tmp_path / "artifacts"
     yml = _write_yaml(tmp_path / "e.yaml", **{"training.epochs": 2})
@@ -572,7 +572,7 @@ class _FakeRayLauncher:
         _FakeRayLauncher.made.append(kw)
 
     def launch(self, spec, **kw):
-        from mlops.application import run_experiment
+        from angku.application import run_experiment
 
         _FakeRayLauncher.launched.append(dict(kw))
         kw.pop("checkpoint_every", None), kw.pop("resume", None)
@@ -583,10 +583,10 @@ class _FakeRayLauncher:
 def fake_ray(monkeypatch):
     # A stand-in module instead of patching the real one: these tests are about the CLI
     # wiring, so they also run without the distributed extra (the core-only CI job).
-    module = types.ModuleType("mlops.adapters.ray_launcher")
+    module = types.ModuleType("angku.adapters.ray_launcher")
     module.RayLauncher = _FakeRayLauncher
     _FakeRayLauncher.made, _FakeRayLauncher.launched = [], []
-    monkeypatch.setitem(sys.modules, "mlops.adapters.ray_launcher", module)
+    monkeypatch.setitem(sys.modules, "angku.adapters.ray_launcher", module)
     return _FakeRayLauncher
 
 
@@ -610,9 +610,9 @@ def test_run_checkpoint_every_goes_to_the_ray_launcher(tmp_path, capsys, fake_ra
 
 
 def test_resume_of_a_ray_run_goes_back_through_ray(tmp_path, capsys, fake_ray):
-    from mlops.adapters.local_artifacts import LocalArtifactStore
-    from mlops.application.bundle import LaunchRecord, save_launch, save_spec
-    from mlops.domain import compute_run_id
+    from angku.adapters.local_artifacts import LocalArtifactStore
+    from angku.application.bundle import LaunchRecord, save_launch, save_spec
+    from angku.domain import compute_run_id
 
     spec = load_experiment_yaml(SMOKE)
     run_id = compute_run_id(compute_experiment_id(spec), spec.resources, 2)
@@ -751,7 +751,7 @@ def test_list_no_match_says_so(tmp_path, capsys):
 
 
 def _fake_kubectl(monkeypatch, stdout="", returncode=0, stderr=""):
-    import mlops.cli as cli
+    import angku.cli as cli
 
     calls = []
 
@@ -772,7 +772,7 @@ def _job(status, deployment="Running", message=""):
     return json.dumps(
         {
             "kind": "RayJob",
-            "metadata": {"name": "mlops-abc-a1", "annotations": {"mlops.io/run-id": "r" * 64}},
+            "metadata": {"name": "angku-abc-a1", "annotations": {"angku.io/run-id": "r" * 64}},
             "status": {"jobStatus": status, "jobDeploymentStatus": deployment, "message": message},
         }
     )
@@ -781,7 +781,7 @@ def _job(status, deployment="Running", message=""):
 @pytest.mark.parametrize("status,rc", [("RUNNING", 0), ("SUCCEEDED", 0), ("FAILED", 1), ("STOPPED", 1)])
 def test_rayjob_status_exit_codes(monkeypatch, capsys, status, rc):
     calls = _fake_kubectl(monkeypatch, _job(status, message="boom" if status == "FAILED" else ""))
-    assert main(["rayjob-status", "mlops-abc-a1", "--namespace", "ml", "--kubectl", "kubectl --context dev"]) == rc
+    assert main(["rayjob-status", "angku-abc-a1", "--namespace", "ml", "--kubectl", "kubectl --context dev"]) == rc
     assert calls[0][:3] == ["kubectl", "--context", "dev"]
     out = capsys.readouterr().out
     assert status in out and ("r" * 12) in out
@@ -791,7 +791,7 @@ def test_rayjob_status_exit_codes(monkeypatch, capsys, status, rc):
 
 def test_rayjob_status_json(monkeypatch, capsys):
     _fake_kubectl(monkeypatch, _job("SUCCEEDED", "Complete"))
-    assert main(["rayjob-status", "mlops-abc-a1", "--json"]) == 0
+    assert main(["rayjob-status", "angku-abc-a1", "--json"]) == 0
     out = json.loads(capsys.readouterr().out)
     assert out["job_status"] == "SUCCEEDED" and out["run_id"] == "r" * 64
 
@@ -805,15 +805,15 @@ def test_rayjob_status_kubectl_error_exits_2(monkeypatch, capsys):
 
 def test_rayjob_logs_follows_and_passes_the_exit_code(monkeypatch):
     calls = _fake_kubectl(monkeypatch, returncode=0)
-    assert main(["rayjob-logs", "mlops-abc-a1", "--namespace", "ml", "-f"]) == 0
-    assert calls == [["kubectl", "logs", "-n", "ml", "job/mlops-abc-a1", "--follow"]]
+    assert main(["rayjob-logs", "angku-abc-a1", "--namespace", "ml", "-f"]) == 0
+    assert calls == [["kubectl", "logs", "-n", "ml", "job/angku-abc-a1", "--follow"]]
 
 
 def test_rayjob_submit_says_how_to_follow_it(capsys, monkeypatch):
     _fake_kubectl(monkeypatch)
     assert main(["rayjob", str(BASELINE), "--data-pvc", "msd", "--submit", "--namespace", "ml"]) == 0
     out = capsys.readouterr().out
-    assert "angku rayjob-status mlops-" in out and "angku rayjob-logs mlops-" in out and "--namespace ml" in out
+    assert "angku rayjob-status angku-" in out and "angku rayjob-logs angku-" in out and "--namespace ml" in out
 
 
 def test_rayjob_for_a_file_dataset_needs_a_data_pvc(capsys):
@@ -834,8 +834,8 @@ def test_rayjob_for_synthetic_data_needs_no_volume(capsys):
 
 
 def test_not_reproduced_explains_with_environment_differences(finished_run, capsys, monkeypatch):
-    import mlops.cli as cli
-    from mlops.adapters.local_artifacts import LocalArtifactStore
+    import angku.cli as cli
+    from angku.adapters.local_artifacts import LocalArtifactStore
     from tests.test_environment import FixedProbe
     from tests.test_reproduce import _edit_weights
 
@@ -845,7 +845,7 @@ def test_not_reproduced_explains_with_environment_differences(finished_run, caps
     assert main(["reproduce", run_id, "--artifacts", str(art), "--tracker", "inmemory"]) == 1
     out = capsys.readouterr().out
     assert "NOT REPRODUCED" in out
-    assert "environment differences" in out and "code.changed" in out and "mlops/x.py" in out
+    assert "environment differences" in out and "code.changed" in out and "angku/x.py" in out
 
 
 # --- resumable RayJobs: --checkpoint-every + --ray-storage-pvc, then `rayjob --resume` ---
@@ -880,12 +880,12 @@ def test_rayjob_resume_renders_one_rayjob_running_angku_resume(capsys):
     assert main(["rayjob", str(BASELINE), *_RESUMABLE, "--attempt", "2", "--resume"]) == 0
     (job,) = json.loads(capsys.readouterr().out)["items"]
     assert job["metadata"]["generateName"].endswith("-a2-resume-")
-    assert job["spec"]["entrypoint"].startswith("angku resume " + job["metadata"]["annotations"]["mlops.io/run-id"])
+    assert job["spec"]["entrypoint"].startswith("angku resume " + job["metadata"]["annotations"]["angku.io/run-id"])
 
 
 def _fake_cluster(monkeypatch, jobs=(), create_rc=0):
     """kubectl: `get rayjob -l` lists ``jobs`` [(name, jobStatus)], `create` echoes a generated name."""
-    import mlops.cli as cli
+    import angku.cli as cli
 
     calls = []
 
@@ -900,7 +900,7 @@ def _fake_cluster(monkeypatch, jobs=(), create_rc=0):
 
         if "create" in cmd:
             R.returncode = create_rc
-            R.stdout = "rayjob.ray.io/mlops-abc-a1-resume-x8k2p\n"
+            R.stdout = "rayjob.ray.io/angku-abc-a1-resume-x8k2p\n"
             R.stderr = "boom" if create_rc else ""
         return R()
 
@@ -910,22 +910,22 @@ def _fake_cluster(monkeypatch, jobs=(), create_rc=0):
 
 def test_rayjob_resume_submit_checks_then_creates(capsys, monkeypatch):
     # Earlier jobs of the run are finished: no deleting, no renaming, just go.
-    calls = _fake_cluster(monkeypatch, jobs=[("mlops-abc-a1", "FAILED"), ("mlops-abc-a1-resume-aaaaa", "STOPPED")])
+    calls = _fake_cluster(monkeypatch, jobs=[("angku-abc-a1", "FAILED"), ("angku-abc-a1-resume-aaaaa", "STOPPED")])
     assert main(["rayjob", str(BASELINE), *_RESUMABLE, "--resume", "--submit", "--namespace", "ml"]) == 0
     assert calls[0][:3] == ["kubectl", "get", "rayjob"] and "-l" in calls[0]
     assert calls[1][:2] == ["kubectl", "create"]
     out = capsys.readouterr().out
-    assert "submitted RayJob mlops-abc-a1-resume-x8k2p" in out
-    assert "angku rayjob-status mlops-abc-a1-resume-x8k2p --namespace ml" in out
+    assert "submitted RayJob angku-abc-a1-resume-x8k2p" in out
+    assert "angku rayjob-status angku-abc-a1-resume-x8k2p --namespace ml" in out
 
 
 def test_rayjob_resume_refuses_while_a_job_of_the_run_is_still_going(capsys, monkeypatch):
     # Two jobs writing the same Ray checkpoints would corrupt the run: refuse, say which one.
-    calls = _fake_cluster(monkeypatch, jobs=[("mlops-abc-a1", "FAILED"), ("mlops-abc-a1-resume-aaaaa", "RUNNING")])
+    calls = _fake_cluster(monkeypatch, jobs=[("angku-abc-a1", "FAILED"), ("angku-abc-a1-resume-aaaaa", "RUNNING")])
     assert main(["rayjob", str(BASELINE), *_RESUMABLE, "--resume", "--submit"]) == 2
     assert not any("create" in c for c in calls)
     err = capsys.readouterr().err
-    assert "mlops-abc-a1-resume-aaaaa" in err and "RUNNING" in err and "Traceback" not in err
+    assert "angku-abc-a1-resume-aaaaa" in err and "RUNNING" in err and "Traceback" not in err
 
 
 def test_rayjob_checkpointing_submit_says_how_to_resume(capsys, monkeypatch):

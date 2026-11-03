@@ -7,8 +7,8 @@ from pathlib import Path
 import pytest
 import torch
 
-from mlops.config import load_experiment_yaml
-from mlops.registry import MODELS, Params, Registry, RegistryError, discover
+from angku.config import load_experiment_yaml
+from angku.registry import MODELS, Params, Registry, RegistryError, discover
 
 CONFIGS = Path(__file__).parent.parent / "experiments/configs"
 

@@ -1,7 +1,7 @@
 """`angku ui`: a terminal browser over an artifacts dir (roadmap 13; phase A browse, phase B actions).
 
-    mlops/ui/rows.py   pure: RunSummary / ExperimentGroup / manifest -> table cells (no textual import)
-    mlops/ui/app.py    Textual: Experiments -> Runs -> Run (tabs Overview, Metrics, Environment, Report)
+    angku/ui/rows.py   pure: RunSummary / ExperimentGroup / manifest -> table cells (no textual import)
+    angku/ui/app.py    Textual: Experiments -> Runs -> Run (tabs Overview, Metrics, Environment, Report)
 
 Keys: Enter drills down, Esc goes back (or clears the filter), / filters, Tab switches tabs, q quits.
 Phase C: a run that is still training (live ``progress.json``) shows as RUNNING with its epoch,
@@ -28,17 +28,17 @@ from pathlib import Path
 import pytest
 import yaml
 
-from mlops.adapters.local_artifacts import LocalArtifactStore
-from mlops.application.bundle import CHECKPOINT, MANIFEST, SPEC
-from mlops.application.listing import ExperimentGroup, RunSummary
-from mlops.application.report import REPORT, final_metric_rows, sparkline
-from mlops.application.reproduce import ReproduceReport
-from mlops.application.runner import RunResult
-from mlops.cli import CliError, _ui_actions, build_parser, main
-from mlops.domain.best import BestRecord
-from mlops.domain.manifest import ResumePoint
-from mlops.ui.actions import UiActions
-from mlops.ui.rows import (
+from angku.adapters.local_artifacts import LocalArtifactStore
+from angku.application.bundle import CHECKPOINT, MANIFEST, SPEC
+from angku.application.listing import ExperimentGroup, RunSummary
+from angku.application.report import REPORT, final_metric_rows, sparkline
+from angku.application.reproduce import ReproduceReport
+from angku.application.runner import RunResult
+from angku.cli import CliError, _ui_actions, build_parser, main
+from angku.domain.best import BestRecord
+from angku.domain.manifest import ResumePoint
+from angku.ui.actions import UiActions
+from angku.ui.rows import (
     EXPERIMENT_COLUMNS,
     experiment_row,
     history_rows,
@@ -160,10 +160,10 @@ def test_resume_lines():
 
 
 def _job(**kw):
-    from mlops.adapters.kuberay import RayJobStatus
+    from angku.adapters.kuberay import RayJobStatus
 
     base = dict(
-        name="mlops-abc-a1",
+        name="angku-abc-a1",
         job_status="RUNNING",
         deployment_status="Running",
         start_time="2026-10-13T10:00:00Z",
@@ -176,7 +176,7 @@ def _job(**kw):
 
 def test_rayjob_rows():
     assert rayjob_row(_job(), in_store=True) == (
-        "mlops-abc-a1",
+        "angku-abc-a1",
         "a" * 12,
         "RUNNING",
         "Running",
@@ -185,7 +185,7 @@ def test_rayjob_rows():
         "here",
     )
     assert rayjob_row(_job(run_id=None, job_status="", deployment_status=""), in_store=False) == (
-        "mlops-abc-a1",
+        "angku-abc-a1",
         "-",
         "-",
         "-",
@@ -199,8 +199,8 @@ def test_rayjob_rows():
 
 def test_core_and_rows_never_import_textual():
     code = (
-        "import sys, mlops.domain, mlops.config, mlops.registry, mlops.ports, mlops.application, "
-        "mlops.application.listing, mlops.application.report, mlops.ui.rows, mlops.ui.actions, mlops.cli; "
+        "import sys, angku.domain, angku.config, angku.registry, angku.ports, angku.application, "
+        "angku.application.listing, angku.application.report, angku.ui.rows, angku.ui.actions, angku.cli; "
         "assert 'textual' not in sys.modules, 'textual imported'"
     )
     subprocess.run([sys.executable, "-c", code], check=True, cwd=ROOT)
@@ -234,9 +234,9 @@ def _rows(table) -> list[tuple]:
 
 
 def _app(art: Path, refresh: float = 60.0, actions: UiActions | None = None):
-    from mlops.ui.app import MlopsApp
+    from angku.ui.app import AngkuApp
 
-    return MlopsApp(LocalArtifactStore(art), label=str(art), refresh=refresh, actions=actions)
+    return AngkuApp(LocalArtifactStore(art), label=str(art), refresh=refresh, actions=actions)
 
 
 def _drive(art: Path, steps, *, refresh: float = 60.0, actions: UiActions | None = None) -> list[str]:
@@ -277,7 +277,7 @@ def test_enter_drills_down_and_escape_goes_back(artifacts):
     async def steps(app, pilot):
         from textual.widgets import DataTable
 
-        from mlops.ui.app import ExperimentsScreen, RunScreen, RunsScreen
+        from angku.ui.app import ExperimentsScreen, RunScreen, RunsScreen
 
         table = app.screen.query_one(DataTable)
         table.move_cursor(row=[r[0] for r in _rows(table)].index("tiny-cnn-smoke"))
@@ -312,7 +312,7 @@ def test_run_screen_tabs(artifacts):
     async def steps(app, pilot):
         from textual.widgets import DataTable, Markdown, TabbedContent
 
-        from mlops.ui.app import RunScreen
+        from angku.ui.app import RunScreen
 
         app.push_screen(RunScreen(run_id))
         await pilot.pause()
@@ -341,7 +341,7 @@ def test_run_screen_of_an_interrupted_run(artifacts):
     async def steps(app, pilot):
         from textual.widgets import DataTable, Markdown
 
-        from mlops.ui.app import RunScreen
+        from angku.ui.app import RunScreen
 
         app.push_screen(RunScreen("f" * 64))
         await pilot.pause()
@@ -391,11 +391,11 @@ def test_rereads_the_store(artifacts, tmp_path):
 
 def test_cli_ui_starts_the_app(artifacts, monkeypatch):
     pytest.importorskip("textual")
-    from mlops.ui.app import MlopsApp
+    from angku.ui.app import AngkuApp
 
     seen = {}
     monkeypatch.setattr(
-        MlopsApp,
+        AngkuApp,
         "run",
         lambda self: seen.update(label=self.label, refresh=self.refresh_every, actions=self.actions, atol=self.atol),
     )
@@ -407,7 +407,7 @@ def test_cli_ui_starts_the_app(artifacts, monkeypatch):
 def test_cli_ui_without_textual_is_a_clean_error(artifacts, monkeypatch, capsys):
     for name in [n for n in sys.modules if n == "textual" or n.startswith("textual.")] or ["textual"]:
         monkeypatch.setitem(sys.modules, name, None)  # cached submodules too, or `textual.app` still imports
-    monkeypatch.delitem(sys.modules, "mlops.ui.app", raising=False)
+    monkeypatch.delitem(sys.modules, "angku.ui.app", raising=False)
     assert main(["ui", "--artifacts", str(artifacts)]) == 2
     assert "'.[tui]'" in capsys.readouterr().err
 
@@ -476,7 +476,7 @@ def test_mark_two_runs_and_diff_them(artifacts):
     async def steps(app, pilot):
         from textual.widgets import DataTable
 
-        from mlops.ui.app import DiffScreen, RunsScreen
+        from angku.ui.app import DiffScreen, RunsScreen
 
         await _to_runs(app, pilot)
         table = app.screen.query_one(DataTable)
@@ -496,7 +496,7 @@ def test_diff_needs_two_marks_and_a_third_drops_the_oldest(artifacts):
     async def steps(app, pilot):
         from textual.widgets import DataTable
 
-        from mlops.ui.app import RunsScreen
+        from angku.ui.app import RunsScreen
 
         await _to_runs(app, pilot)
         table = app.screen.query_one(DataTable)
@@ -516,7 +516,7 @@ def test_reproduce_asks_first_then_runs_in_the_background(artifacts):
     fake = FakeActions()
 
     async def steps(app, pilot):
-        from mlops.ui.app import ConfirmScreen, ResultScreen, RunsScreen
+        from angku.ui.app import ConfirmScreen, ResultScreen, RunsScreen
 
         await _to_runs(app, pilot)
         run_id = _cursor_to(app, "FINISHED")
@@ -540,7 +540,7 @@ def test_reproduce_refuses_a_run_that_did_not_finish(artifacts):
     fake = FakeActions()
 
     async def steps(app, pilot):
-        from mlops.ui.app import RunsScreen
+        from angku.ui.app import RunsScreen
 
         await _to_runs(app, pilot)
         _cursor_to(app, "INTERRUPTED")
@@ -555,7 +555,7 @@ def test_resume_a_resumable_run(artifacts):
     fake = FakeActions()
 
     async def steps(app, pilot):
-        from mlops.ui.app import ConfirmScreen, ResultScreen
+        from angku.ui.app import ConfirmScreen, ResultScreen
 
         await _to_runs(app, pilot)
         _cursor_to(app, "FINISHED")
@@ -577,7 +577,7 @@ def test_run_screen_has_the_same_keys(artifacts):
     run_id = _finished_run_id(artifacts)
 
     async def steps(app, pilot):
-        from mlops.ui.app import RunScreen
+        from angku.ui.app import RunScreen
 
         app.push_screen(RunScreen(run_id))
         await pilot.pause()
@@ -674,7 +674,7 @@ def live(artifacts, tmp_path) -> tuple[Path, str]:
     """A copy of ``artifacts`` plus a run of the smoke spec that is training right now."""
     import time
 
-    from mlops.application.progress import Progress, save_progress
+    from angku.application.progress import Progress, save_progress
 
     art = tmp_path / "artifacts"
     shutil.copytree(artifacts, art)
@@ -704,7 +704,7 @@ def test_running_run_shows_live(live):
     async def steps(app, pilot):
         from textual.widgets import DataTable, Markdown
 
-        from mlops.ui.app import RunScreen
+        from angku.ui.app import RunScreen
 
         await _to_runs(app, pilot)
         rows = {r[1]: r for r in _rows(app.screen.query_one(DataTable))}
@@ -724,7 +724,7 @@ def test_running_run_is_not_resumed(live):
     fake = FakeActions()
 
     async def steps(app, pilot):
-        from mlops.ui.app import ConfirmScreen, RunScreen
+        from angku.ui.app import ConfirmScreen, RunScreen
 
         app.push_screen(RunScreen(run_id))
         await pilot.pause()
@@ -745,7 +745,7 @@ class FakeCluster:
 
     def rayjobs(self):
         if self.fail:
-            from mlops.adapters.kuberay import KubeRayError
+            from angku.adapters.kuberay import KubeRayError
 
             raise KubeRayError(self.fail)
         return self.jobs
@@ -771,7 +771,7 @@ def test_rayjobs_screen_lists_jobs_and_links_bundles(artifacts):
     async def steps(app, pilot):
         from textual.widgets import DataTable
 
-        from mlops.ui.app import RayJobScreen, RayJobsScreen, RunScreen
+        from angku.ui.app import RayJobScreen, RayJobsScreen, RunScreen
 
         await _to_rayjobs(app, pilot)
         assert isinstance(app.screen, RayJobsScreen)
@@ -793,23 +793,23 @@ def test_rayjob_logs_screen(artifacts):
     cluster = FakeCluster([_job()])
 
     async def steps(app, pilot):
-        from mlops.ui.app import LogsScreen
+        from angku.ui.app import LogsScreen
 
         await _to_rayjobs(app, pilot)
         await pilot.press("l")
         await _settle(app, pilot)
         assert isinstance(app.screen, LogsScreen)
-        assert "driver log of mlops-abc-a1" in app.screen.text
+        assert "driver log of angku-abc-a1" in app.screen.text
 
     _drive(artifacts, steps, actions=cluster.ui())
-    assert cluster.log_calls == ["mlops-abc-a1"]
+    assert cluster.log_calls == ["angku-abc-a1"]
 
 
 def test_kubectl_failure_is_shown_not_raised(artifacts):
     async def steps(app, pilot):
         from textual.widgets import DataTable, Static
 
-        from mlops.ui.app import RayJobsScreen
+        from angku.ui.app import RayJobsScreen
 
         await _to_rayjobs(app, pilot)
         assert isinstance(app.screen, RayJobsScreen)
@@ -822,7 +822,7 @@ def test_kubectl_failure_is_shown_not_raised(artifacts):
 
 def test_rayjobs_not_available_without_the_callable(artifacts):
     async def steps(app, pilot):
-        from mlops.ui.app import ExperimentsScreen
+        from angku.ui.app import ExperimentsScreen
 
         await pilot.press("j")
         assert isinstance(app.screen, ExperimentsScreen)
@@ -850,6 +850,6 @@ def test_cli_ui_rayjobs_go_through_kubectl(artifacts, monkeypatch):
     actions = _ui_actions(args, LocalArtifactStore(artifacts))
     assert actions.rayjobs() == [] and actions.rayjob_logs("j1") == "log\n"
     assert calls == [
-        ["kubectl", "--context", "lab", "get", "rayjob", "-n", "ml", "-l", "mlops.io/run", "-o", "json"],
+        ["kubectl", "--context", "lab", "get", "rayjob", "-n", "ml", "-l", "angku.io/run", "-o", "json"],
         ["kubectl", "--context", "lab", "logs", "-n", "ml", "job/j1", "--tail=200"],
     ]

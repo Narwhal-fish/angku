@@ -14,16 +14,16 @@ import pytest
 import torch
 from pydantic import ValidationError
 
-from mlops.adapters.inmemory_artifacts import InMemoryArtifactStore
-from mlops.adapters.inmemory_tracker import InMemoryTracker
-from mlops.adapters.local_artifacts import LocalArtifactStore
-from mlops.adapters.synthetic_data import SyntheticBlobs
-from mlops.application import run_experiment
-from mlops.application.bundle import MANIFEST, MODEL, SPEC, load_bundle
-from mlops.config import load_experiment_yaml
-from mlops.domain import RunManifest
-from mlops.ports.artifacts import ArtifactError
-from mlops.registry import MODELS, discover
+from angku.adapters.inmemory_artifacts import InMemoryArtifactStore
+from angku.adapters.inmemory_tracker import InMemoryTracker
+from angku.adapters.local_artifacts import LocalArtifactStore
+from angku.adapters.synthetic_data import SyntheticBlobs
+from angku.application import run_experiment
+from angku.application.bundle import MANIFEST, MODEL, SPEC, load_bundle
+from angku.config import load_experiment_yaml
+from angku.domain import RunManifest
+from angku.ports.artifacts import ArtifactError
+from angku.registry import MODELS, discover
 
 CONFIGS = Path(__file__).parent.parent / "experiments/configs"
 
@@ -196,7 +196,7 @@ def test_undefined_metric_survives_the_bundle_roundtrip(store):
     # NaN = "metric undefined" (e.g. Dice on an absent class); plain JSON would turn it into null.
     import math
 
-    from mlops.application.bundle import save_bundle
+    from angku.application.bundle import save_bundle
 
     spec = load_experiment_yaml(CONFIGS / "tiny_cnn_smoke.yaml")
     manifest = RunManifest(

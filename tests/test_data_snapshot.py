@@ -20,18 +20,18 @@ from pathlib import Path
 
 import pytest
 
-from mlops.adapters.inmemory_artifacts import InMemoryArtifactStore
-from mlops.adapters.inmemory_tracker import InMemoryTracker
-from mlops.adapters.synthetic_data import SyntheticBlobs
-from mlops.application import run_experiment
-from mlops.application.bundle import load_bundle
-from mlops.cli import main
-from mlops.config import load_experiment_yaml
-from mlops.domain import compute_experiment_id, compute_run_id
-from mlops.domain.environment import check_snapshot
-from mlops.ports.artifacts import ArtifactError
-from mlops.ports.data import DataError
-from mlops.registry import discover
+from angku.adapters.inmemory_artifacts import InMemoryArtifactStore
+from angku.adapters.inmemory_tracker import InMemoryTracker
+from angku.adapters.synthetic_data import SyntheticBlobs
+from angku.application import run_experiment
+from angku.application.bundle import load_bundle
+from angku.cli import main
+from angku.config import load_experiment_yaml
+from angku.domain import compute_experiment_id, compute_run_id
+from angku.domain.environment import check_snapshot
+from angku.ports.artifacts import ArtifactError
+from angku.ports.data import DataError
+from angku.registry import discover
 
 ROOT = Path(__file__).parent.parent
 SMOKE = ROOT / "experiments/configs/tiny_cnn_smoke.yaml"
@@ -128,8 +128,8 @@ def spleen_root(tmp_path):
 
 
 def _spleen_snapshot(root: Path) -> str:
-    from mlops.domain.experiment import Dataset
-    from mlops.registry import DATASETS
+    from angku.domain.experiment import Dataset
+    from angku.registry import DATASETS
 
     p = DATASETS.build("msd-task09-spleen", {"root": str(root)})
     return p.snapshot(Dataset(name="msd-task09-spleen", snapshot="x"))
@@ -227,7 +227,7 @@ def test_cli_warns_about_unverified_data(capsys):
 
 
 def test_cli_strict_env_refuses_unverified_data(capsys, monkeypatch):
-    import mlops.cli as cli
+    import angku.cli as cli
     from tests.test_environment import FixedProbe
 
     spec = load_experiment_yaml(SMOKE)

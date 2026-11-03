@@ -5,7 +5,7 @@ run_id, history and weights". ``reproduce_run`` executes that promise and
 reports which part held. The original bundle is evidence and is never
 modified: the replay goes into a scratch store the caller supplies.
 
-Proposed API (mlops/application/reproduce.py):
+Proposed API (angku/application/reproduce.py):
 
     report = reproduce_run(
         store, run_id, data=..., tracker=..., scratch=ArtifactStore(), device=None, atol=0.0
@@ -27,14 +27,14 @@ from pathlib import Path
 import pytest
 import torch
 
-from mlops.adapters.inmemory_artifacts import InMemoryArtifactStore
-from mlops.adapters.inmemory_tracker import InMemoryTracker
-from mlops.adapters.local_artifacts import LocalArtifactStore
-from mlops.adapters.synthetic_data import SyntheticBlobs
-from mlops.application import run_experiment
-from mlops.application.bundle import MANIFEST, MODEL, save_bundle
-from mlops.application.launch import LocalLauncher
-from mlops.application.reproduce import (
+from angku.adapters.inmemory_artifacts import InMemoryArtifactStore
+from angku.adapters.inmemory_tracker import InMemoryTracker
+from angku.adapters.local_artifacts import LocalArtifactStore
+from angku.adapters.synthetic_data import SyntheticBlobs
+from angku.application import run_experiment
+from angku.application.bundle import MANIFEST, MODEL, save_bundle
+from angku.application.launch import LocalLauncher
+from angku.application.reproduce import (
     Mismatch,
     ReproduceError,
     ReproduceReport,
@@ -42,9 +42,9 @@ from mlops.application.reproduce import (
     reproduce_lines,
     reproduce_run,
 )
-from mlops.config import load_experiment_dict, load_experiment_yaml
-from mlops.domain import RunManifest, compute_experiment_id, compute_run_id
-from mlops.registry import discover
+from angku.config import load_experiment_dict, load_experiment_yaml
+from angku.domain import RunManifest, compute_experiment_id, compute_run_id
+from angku.registry import discover
 
 CONFIGS = Path(__file__).parent.parent / "experiments/configs"
 
@@ -245,8 +245,8 @@ def test_replay_failure_propagates_and_is_not_reported_as_a_mismatch(spec, store
 
 
 def test_undefined_metric_on_both_sides_is_not_a_mismatch(spec, store):
-    from mlops.config import load_experiment_dict
-    from mlops.registry import METRICS, Params
+    from angku.config import load_experiment_dict
+    from angku.registry import METRICS, Params
 
     class _NoParams(Params):
         pass
@@ -275,7 +275,7 @@ def test_replay_records_its_environment_and_diffs_it_against_the_original(spec, 
     report = _reproduce(store, run_id, probe=FixedProbe(commit_ok=False))
     assert report.ok  # same weights: the env difference did not matter this time
     changes = {c.path: c for c in report.environment}
-    assert changes["code.changed"].a == [] and changes["code.changed"].b == ["mlops/x.py"]
+    assert changes["code.changed"].a == [] and changes["code.changed"].b == ["angku/x.py"]
 
 
 def test_same_environment_gives_no_environment_changes(spec, store):
@@ -299,7 +299,7 @@ def test_environment_changes_are_in_the_json(spec, store):
         spec, data=_data(), tracker=InMemoryTracker(), artifacts=store, probe=FixedProbe(commit_ok=True)
     ).run_id
     out = json.loads(json.dumps(_reproduce(store, run_id, probe=FixedProbe(commit_ok=False)).to_dict()))
-    assert {"path": "code.changed", "a": [], "b": ["mlops/x.py"]} in out["environment"]
+    assert {"path": "code.changed", "a": [], "b": ["angku/x.py"]} in out["environment"]
 
 
 # --- the replay launcher: the run is replayed by the launcher it is given ---

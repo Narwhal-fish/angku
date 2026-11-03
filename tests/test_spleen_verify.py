@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from mlops.cli import build_parser
+from angku.cli import build_parser
 
 ROOT = Path(__file__).parent.parent
 SCRIPT = ROOT / "scripts" / "spleen-verify.sh"

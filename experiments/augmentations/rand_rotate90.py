@@ -11,8 +11,8 @@ import torch
 from pydantic import Field, field_validator
 from torch import Tensor
 
+from angku.registry import AUGMENTATIONS, Params
 from experiments.augmentations._batch import check_axes, coin, n_spatial
-from mlops.registry import AUGMENTATIONS, Params
 
 
 class RandRotate90Params(Params):

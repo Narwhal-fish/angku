@@ -8,21 +8,21 @@ import pytest
 import torch
 from pydantic import ValidationError
 
-from mlops.adapters.inmemory_artifacts import InMemoryArtifactStore
-from mlops.adapters.inmemory_tracker import InMemoryTracker
-from mlops.adapters.local_artifacts import LocalArtifactStore
-from mlops.adapters.synthetic_data import SyntheticBlobs
-from mlops.application import run_experiment
-from mlops.application.bundle import MANIFEST, load_bundle
-from mlops.application.diff import diff_runs
-from mlops.application.gc import GcPolicy, apply_gc, plan_gc
-from mlops.application.listing import list_runs
-from mlops.application.predict import RESULT, predict_run
-from mlops.cli import main
-from mlops.config import load_experiment_yaml
-from mlops.domain import FORMAT_VERSION, BundleFormatError, DomainError, RunManifest, parse_manifest
-from mlops.domain.prediction import RESULT_FORMAT_VERSION, parse_result
-from mlops.registry import discover
+from angku.adapters.inmemory_artifacts import InMemoryArtifactStore
+from angku.adapters.inmemory_tracker import InMemoryTracker
+from angku.adapters.local_artifacts import LocalArtifactStore
+from angku.adapters.synthetic_data import SyntheticBlobs
+from angku.application import run_experiment
+from angku.application.bundle import MANIFEST, load_bundle
+from angku.application.diff import diff_runs
+from angku.application.gc import GcPolicy, apply_gc, plan_gc
+from angku.application.listing import list_runs
+from angku.application.predict import RESULT, predict_run
+from angku.cli import main
+from angku.config import load_experiment_yaml
+from angku.domain import FORMAT_VERSION, BundleFormatError, DomainError, RunManifest, parse_manifest
+from angku.domain.prediction import RESULT_FORMAT_VERSION, parse_result
+from angku.registry import discover
 
 CONFIGS = Path(__file__).parent.parent / "experiments/configs"
 

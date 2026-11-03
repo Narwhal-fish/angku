@@ -3,8 +3,8 @@
 #
 #   1. the image sees the GPU (`docker run --gpus all`): torch.cuda, its CUDA + cuDNN
 #   2. run C: the baseline spec cut to EPOCHS epochs, pinned to this image (image + digest, and
-#      code.commit = the MLOPS_GIT_COMMIT baked into it), run inside the container on the real
-#      spleen data; the pod-style MLOPS_IMAGE_DIGEST is passed like KubeRay does
+#      code.commit = the ANGKU_GIT_COMMIT baked into it), run inside the container on the real
+#      spleen data; the pod-style ANGKU_IMAGE_DIGEST is passed like KubeRay does
 #   3. every pin verifies inside the container: code.commit, environment.image_digest,
 #      dataset.snapshot all ok
 #   4. `angku reproduce C` inside the container: bit-exact
@@ -13,8 +13,8 @@
 #
 #   scripts/image-verify.sh REPO@sha256:DIGEST DATA_ROOT
 #
-# REPO@sha256:... = what build-image.sh --push printed (e.g. localhost:5001/mlops-train@sha256:...).
-# DATA_ROOT holds Task09_Spleen/ (or $MLOPS_DATA_ROOT). Needs docker with GPU support, torch with
+# REPO@sha256:... = what build-image.sh --push printed (e.g. localhost:5001/angku-train@sha256:...).
+# DATA_ROOT holds Task09_Spleen/ (or $ANGKU_DATA_ROOT). Needs docker with GPU support, torch with
 # CUDA on the host, the medical extra; exit 2 otherwise. Spec -> .gpu/image/swinunetr_image.yaml,
 # bundles -> .gpu/image/container (mounted at /work) and .gpu/image/host (both cleared first).
 # Exit 0 = every check passed.
@@ -22,7 +22,7 @@ set -euo pipefail
 
 EPOCHS="${EPOCHS:-2}"
 IMAGE_REF="${1:-}"
-DATA_ROOT="${2:-${MLOPS_DATA_ROOT:-}}"
+DATA_ROOT="${2:-${ANGKU_DATA_ROOT:-}}"
 export MLFLOW_DISABLE_AGENT_HINT=1
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -31,9 +31,9 @@ PY="$root/.venv/bin/python"
 BASELINE=experiments/configs/swinunetr_baseline.yaml
 OUT=.gpu/image
 SPEC=$OUT/swinunetr_image.yaml
-angku() { "$PY" -m mlops "$@"; }
+angku() { "$PY" -m angku "$@"; }
 step() { echo; echo "== $*"; }
-usage() { echo "usage: $0 REPO@sha256:DIGEST DATA_ROOT  (DATA_ROOT holds Task09_Spleen/; or set MLOPS_DATA_ROOT)" >&2; exit 2; }
+usage() { echo "usage: $0 REPO@sha256:DIGEST DATA_ROOT  (DATA_ROOT holds Task09_Spleen/; or set ANGKU_DATA_ROOT)" >&2; exit 2; }
 
 step "image + data"
 [[ "$IMAGE_REF" =~ ^([^@]+)@(sha256:[0-9a-f]{64})$ ]] || usage
@@ -49,13 +49,13 @@ if ! docker image inspect "$IMAGE_REF" >/dev/null 2>&1 && ! docker pull -q "$IMA
     exit 2
 fi
 COMMIT="$(docker image inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$IMAGE_REF" \
-    | sed -n 's/^MLOPS_GIT_COMMIT=//p')"
-[[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo "$IMAGE_REF has no MLOPS_GIT_COMMIT: not built by build-image.sh" >&2; exit 2; }
+    | sed -n 's/^ANGKU_GIT_COMMIT=//p')"
+[[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo "$IMAGE_REF has no ANGKU_GIT_COMMIT: not built by build-image.sh" >&2; exit 2; }
 echo "$REPO @ ${DIGEST:0:19}... built from ${COMMIT:0:12} | data root $DATA_ROOT"
 rm -rf "$OUT/container" "$OUT/host" && mkdir -p "$OUT/container" "$OUT/host"
 
 in_image() {
-    docker run --rm --gpus all -e "MLOPS_IMAGE_DIGEST=$DIGEST" -e MLFLOW_DISABLE_AGENT_HINT=1 \
+    docker run --rm --gpus all -e "ANGKU_IMAGE_DIGEST=$DIGEST" -e MLFLOW_DISABLE_AGENT_HINT=1 \
         -v "$root/$OUT:/work" -v "$DATA_ROOT:/data:ro" -w /work "$IMAGE_REF" "$@"
 }
 # The base image's entrypoint (kept: KubeRay pods run it too) prints NVIDIA's CUDA banner on stdout;

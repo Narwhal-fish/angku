@@ -12,14 +12,14 @@ import pytest
 import torch
 import yaml
 
-from mlops.adapters.inmemory_artifacts import InMemoryArtifactStore
-from mlops.adapters.inmemory_tracker import InMemoryTracker
-from mlops.adapters.local_artifacts import LocalArtifactStore
-from mlops.adapters.synthetic_data import SyntheticBlobs
-from mlops.application import run_experiment
-from mlops.application.bundle import load_bundle, save_bundle
-from mlops.application.listing import list_runs
-from mlops.application.predict import (
+from angku.adapters.inmemory_artifacts import InMemoryArtifactStore
+from angku.adapters.inmemory_tracker import InMemoryTracker
+from angku.adapters.local_artifacts import LocalArtifactStore
+from angku.adapters.synthetic_data import SyntheticBlobs
+from angku.application import run_experiment
+from angku.application.bundle import load_bundle, save_bundle
+from angku.application.listing import list_runs
+from angku.application.predict import (
     PREDICTIONS,
     REPORT,
     RESULT,
@@ -30,11 +30,11 @@ from mlops.application.predict import (
     mean_metrics,
     predict_run,
 )
-from mlops.config import load_experiment_dict
-from mlops.domain.best import BestCriterion
-from mlops.domain.prediction import CaseResult
-from mlops.ports.data import DataError
-from mlops.registry import discover
+from angku.config import load_experiment_dict
+from angku.domain.best import BestCriterion
+from angku.domain.prediction import CaseResult
+from angku.ports.data import DataError
+from angku.registry import discover
 
 SMOKE_YAML = Path(__file__).parent.parent / "experiments/configs/tiny_cnn_smoke.yaml"
 
@@ -197,7 +197,7 @@ def test_results_live_beside_runs_without_being_listed_as_runs(tmp_path):
 
 # -- CLI ---------------------------------------------------------------------------
 
-from mlops.cli import main  # noqa: E402
+from angku.cli import main  # noqa: E402
 
 
 def _cli_run(tmp_path, capsys, split=WITH_TEST):

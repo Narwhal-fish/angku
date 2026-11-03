@@ -17,8 +17,8 @@ import torch
 from pydantic import Field
 from torch import nn
 
+from angku.registry import LOSSES, Params
 from experiments.losses._cross_entropy import CrossEntropy
-from mlops.registry import LOSSES, Params
 
 
 class CrossEntropyParams(Params):

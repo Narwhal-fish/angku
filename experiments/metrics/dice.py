@@ -16,7 +16,7 @@ import torch
 from pydantic import field_validator
 from torch import Tensor
 
-from mlops.registry import METRICS, Params
+from angku.registry import METRICS, Params
 
 
 class DiceParams(Params):

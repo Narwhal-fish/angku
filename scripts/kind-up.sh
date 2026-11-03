@@ -8,13 +8,13 @@
 #
 # The PVs are host directories (.kind/artifacts, .kind/ray-storage) mounted into the kind node,
 # so the bundles a RayJob writes are readable on this machine:
-#   angku ui --artifacts .kind/artifacts --kubectl "kubectl --context kind-mlops"
+#   angku ui --artifacts .kind/artifacts --kubectl "kubectl --context kind-angku"
 # A single kind node stands in for RWX storage; it says nothing about RWX across real nodes.
 set -euo pipefail
 
-CLUSTER="${MLOPS_KIND_CLUSTER:-mlops}"
-NODE_IMAGE="${MLOPS_KIND_NODE_IMAGE:-kindest/node:v1.35.0}"
-REGISTRY=mlops-registry
+CLUSTER="${ANGKU_KIND_CLUSTER:-angku}"
+NODE_IMAGE="${ANGKU_KIND_NODE_IMAGE:-kindest/node:v1.35.0}"
+REGISTRY=angku-registry
 REGISTRY_PORT=5001  # images are pushed as localhost:5001/...; the node resolves that to the registry
 KUBERAY_VERSION=v1.7.1
 CONTEXT="kind-$CLUSTER"
@@ -48,9 +48,9 @@ nodes:
 - role: control-plane
   extraMounts:
   - hostPath: $state/artifacts
-    containerPath: /mlops/artifacts
+    containerPath: /angku/artifacts
   - hostPath: $state/ray-storage
-    containerPath: /mlops/ray-storage
+    containerPath: /angku/ray-storage
 EOF
 fi
 
@@ -67,30 +67,30 @@ kubectl --context "$CONTEXT" apply --server-side \
     -k "github.com/ray-project/kuberay/ray-operator/config/default?ref=$KUBERAY_VERSION"
 kubectl --context "$CONTEXT" rollout status deployment/kuberay-operator --timeout=300s
 
-echo "== PVs + PVCs: mlops-artifacts, mlops-ray-storage"
+echo "== PVs + PVCs: angku-artifacts, angku-ray-storage"
 for name in artifacts ray-storage; do
     kubectl --context "$CONTEXT" apply -f - <<EOF
 apiVersion: v1
 kind: PersistentVolume
 metadata:
-  name: mlops-$name
+  name: angku-$name
 spec:
   capacity: {storage: 20Gi}
   accessModes: [ReadWriteMany]
   persistentVolumeReclaimPolicy: Retain
   storageClassName: ""
-  hostPath: {path: /mlops/$name, type: Directory}
-  claimRef: {namespace: default, name: mlops-$name}
+  hostPath: {path: /angku/$name, type: Directory}
+  claimRef: {namespace: default, name: angku-$name}
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: mlops-$name
+  name: angku-$name
   namespace: default
 spec:
   accessModes: [ReadWriteMany]
   storageClassName: ""
-  volumeName: mlops-$name
+  volumeName: angku-$name
   resources: {requests: {storage: 20Gi}}
 EOF
 done
