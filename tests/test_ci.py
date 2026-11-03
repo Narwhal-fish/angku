@@ -50,3 +50,16 @@ def test_blame_ignore_revs_are_on_the_current_history():
     for rev in _blame_ignore_revs():
         git = ["git", "-C", str(ROOT), "merge-base", "--is-ancestor", rev, "HEAD"]
         assert subprocess.run(git, capture_output=True).returncode == 0, f"{rev} is not an ancestor of HEAD"
+
+
+def test_every_action_is_pinned_to_a_full_commit_sha():
+    uses = [step["uses"] for job in WORKFLOW["jobs"].values() for step in job["steps"] if "uses" in step]
+    assert uses
+    for ref in uses:
+        assert re.fullmatch(r"[\w.-]+/[\w.-]+@[0-9a-f]{40}", ref), ref
+
+
+def test_dependabot_keeps_the_pinned_actions_up_to_date():
+    config = yaml.safe_load((ROOT / ".github/dependabot.yml").read_text())
+    ecosystems = {u["package-ecosystem"]: u for u in config["updates"]}
+    assert ecosystems["github-actions"]["directory"] == "/"
