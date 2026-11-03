@@ -119,7 +119,7 @@ metrics and datasets are referred to by name. To add your own model, put a file 
 ```python
 from pydantic import Field
 from torch import nn
-from mlops.registry import MODELS, Params
+from angku.registry import MODELS, Params
 
 class MyNetParams(Params):
     channels: int = Field(gt=0)
@@ -268,7 +268,7 @@ cluster:
 1. Build and push the training image. The script prints the image digest:
 
    ```bash
-   scripts/build-image.sh REGISTRY/mlops-train:TAG --push
+   scripts/build-image.sh REGISTRY/angku-train:TAG --push
    ```
 
 2. Put that digest and your commit in the YAML. Then submit the job:
@@ -289,7 +289,7 @@ With Docker, [kind](https://kind.sigs.k8s.io/) and kubectl you can run a small c
 ```bash
 scripts/kind-up.sh       # start a local cluster with KubeRay
 scripts/kind-verify.sh   # train on it, stop a job halfway, resume it, check the result
-angku ui --artifacts .kind/artifacts --kubectl "kubectl --context kind-mlops"
+angku ui --artifacts .kind/artifacts --kubectl "kubectl --context kind-angku"
 scripts/kind-down.sh     # remove the cluster when you are done
 ```
 

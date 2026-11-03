@@ -14,8 +14,8 @@ from pathlib import Path
 
 import pytest
 
-from mlops.adapters.local_environment import COMMIT_ENV, IMAGE_DIGEST_ENV
-from mlops.cli import build_parser
+from angku.adapters.local_environment import COMMIT_ENV, IMAGE_DIGEST_ENV
+from angku.cli import build_parser
 
 ROOT = Path(__file__).parent.parent
 SCRIPT = ROOT / "scripts" / "image-verify.sh"

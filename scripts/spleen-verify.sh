@@ -10,7 +10,7 @@
 #   5. run B (attempt 2, checkpoint every 2 epochs) SIGKILLed from inside at epoch KILL_AT_EPOCH,
 #      then `angku resume B`: B == A bit for bit (history, model.pt, best.pt)
 #
-#   scripts/spleen-verify.sh DATA_ROOT        (DATA_ROOT holds Task09_Spleen/; or $MLOPS_DATA_ROOT)
+#   scripts/spleen-verify.sh DATA_ROOT        (DATA_ROOT holds Task09_Spleen/; or $ANGKU_DATA_ROOT)
 #
 # Needs torch with CUDA, the medical extra and the data; exit 2 otherwise. Sets
 # PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True unless already set (the angku CLI does too; the
@@ -22,7 +22,7 @@ set -euo pipefail
 
 EPOCHS="${EPOCHS:-4}"
 KILL_AT_EPOCH="${KILL_AT_EPOCH:-3}"
-DATA_ROOT="${1:-${MLOPS_DATA_ROOT:-}}"
+DATA_ROOT="${1:-${ANGKU_DATA_ROOT:-}}"
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 export MLFLOW_DISABLE_AGENT_HINT=1
 
@@ -33,12 +33,12 @@ BASELINE=experiments/configs/swinunetr_baseline.yaml
 OUT=.gpu/spleen
 SPEC=$OUT/swinunetr_gpu.yaml
 ART=$OUT/artifacts
-angku() { "$PY" -m mlops "$@"; }
+angku() { "$PY" -m angku "$@"; }
 step() { echo; echo "== $*"; }
 
 step "GPU + data"
 if [ -z "$DATA_ROOT" ] || [ ! -f "$DATA_ROOT/Task09_Spleen/dataset.json" ]; then
-    echo "usage: $0 DATA_ROOT  (the directory holding Task09_Spleen/dataset.json; or set MLOPS_DATA_ROOT)" >&2
+    echo "usage: $0 DATA_ROOT  (the directory holding Task09_Spleen/dataset.json; or set ANGKU_DATA_ROOT)" >&2
     exit 2
 fi
 DATA_ROOT="$(cd "$DATA_ROOT" && pwd)"
@@ -81,9 +81,9 @@ import time
 
 import torch
 
-from mlops.application.runner import seed_everything
-from mlops.config import load_experiment_yaml
-from mlops.registry import DATASETS, INFERERS, LOSSES, MODELS, discover
+from angku.application.runner import seed_everything
+from angku.config import load_experiment_yaml
+from angku.registry import DATASETS, INFERERS, LOSSES, MODELS, discover
 
 spec_path, data_root, out = sys.argv[1:4]
 discover("experiments")
@@ -149,13 +149,13 @@ import os
 import signal
 import sys
 
-from mlops.adapters.inmemory_tracker import InMemoryTracker
-from mlops.adapters.local_artifacts import LocalArtifactStore
-from mlops.adapters.local_environment import LocalEnvironmentProbe
-from mlops.application import run_experiment
-from mlops.config import load_experiment_yaml
-from mlops.domain.best import BestCriterion
-from mlops.registry import DATASETS, discover
+from angku.adapters.inmemory_tracker import InMemoryTracker
+from angku.adapters.local_artifacts import LocalArtifactStore
+from angku.adapters.local_environment import LocalEnvironmentProbe
+from angku.application import run_experiment
+from angku.config import load_experiment_yaml
+from angku.domain.best import BestCriterion
+from angku.registry import DATASETS, discover
 
 spec_path, art, data_root, kill_at = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
 
@@ -187,8 +187,8 @@ KILL_EXIT=$?
 set -e
 echo "exit $KILL_EXIT (137 = SIGKILL)"
 RUN_B="$("$PY" -c 'import sys
-from mlops.config import load_experiment_yaml
-from mlops.domain import compute_experiment_id, compute_run_id
+from angku.config import load_experiment_yaml
+from angku.domain import compute_experiment_id, compute_run_id
 s = load_experiment_yaml(sys.argv[1]); print(compute_run_id(compute_experiment_id(s), s.resources, 2))' "$SPEC")"
 echo "run B = $RUN_B"
 angku list --artifacts "$ART" --json > $OUT/list_killed.json

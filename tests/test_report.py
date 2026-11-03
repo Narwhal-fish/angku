@@ -4,7 +4,7 @@ The bundle is the source of truth, not the tracker: the report is a pure
 function of ``(spec.json, manifest.json, model.pt)``. Same bundle -> same bytes,
 so a report can be regenerated and diffed at any time.
 
-API (mlops/application/report.py):
+API (angku/application/report.py):
 
     render_report(bundle) -> str             Markdown
     write_report(store, run_id) -> str       render from the stored bundle, put it as report.md
@@ -14,15 +14,15 @@ from __future__ import annotations
 
 import pytest
 
-from mlops.adapters.inmemory_artifacts import InMemoryArtifactStore
-from mlops.adapters.inmemory_tracker import InMemoryTracker
-from mlops.adapters.synthetic_data import SyntheticBlobs
-from mlops.application import run_experiment
-from mlops.application.bundle import Bundle, load_bundle
-from mlops.application.report import REPORT, render_report, write_report
-from mlops.config import load_experiment_yaml
-from mlops.domain import RunManifest
-from mlops.registry import discover
+from angku.adapters.inmemory_artifacts import InMemoryArtifactStore
+from angku.adapters.inmemory_tracker import InMemoryTracker
+from angku.adapters.synthetic_data import SyntheticBlobs
+from angku.application import run_experiment
+from angku.application.bundle import Bundle, load_bundle
+from angku.application.report import REPORT, render_report, write_report
+from angku.config import load_experiment_yaml
+from angku.domain import RunManifest
+from angku.registry import discover
 from tests.test_reproduce import CONFIGS
 
 
@@ -109,7 +109,7 @@ def test_fingerprint_section_lists_every_pin_and_setting(bundle):
 
 
 def test_augmentations_are_listed_in_order(spec):
-    from mlops.domain.experiment import Augmentation
+    from angku.domain.experiment import Augmentation
 
     spec = spec.model_copy(
         update={
@@ -229,7 +229,7 @@ def test_write_report_does_not_touch_the_evidence(stored):
 
 
 def _fake_bundle(spec, *, status="FINISHED", history=None) -> Bundle:
-    from mlops.domain import compute_experiment_id, compute_run_id
+    from angku.domain import compute_experiment_id, compute_run_id
 
     exp = compute_experiment_id(spec)
     manifest = RunManifest(
@@ -250,14 +250,14 @@ def _fake_bundle(spec, *, status="FINISHED", history=None) -> Bundle:
 
 
 def test_environment_section_shows_checks_and_versions(spec):
-    from mlops.domain.environment import record_environment
+    from angku.domain.environment import record_environment
     from tests.test_environment import FixedProbe
 
     b = _fake_bundle(spec)
     env = record_environment(spec, FixedProbe(commit_ok=False).capture(spec))
     b = Bundle(spec=b.spec, manifest=b.manifest.model_copy(update={"environment": env}), model_state=b.model_state)
     body = _section(render_report(b), "Environment")
-    assert "mismatch" in body and "mlops/x.py" in body
+    assert "mismatch" in body and "angku/x.py" in body
     assert "unknown" in body  # image digest
     assert "torch" in body and "2.x" in body
     assert "3.12.0" in body
@@ -265,7 +265,7 @@ def test_environment_section_shows_checks_and_versions(spec):
 
 
 def test_header_flags_an_unverified_environment(spec):
-    from mlops.domain.environment import record_environment
+    from angku.domain.environment import record_environment
     from tests.test_environment import FixedProbe
 
     b = _fake_bundle(spec)
@@ -279,7 +279,7 @@ def test_header_flags_an_unverified_environment(spec):
 
 
 def _with_data_check(b: Bundle, status: str, detail: str) -> Bundle:
-    from mlops.domain.environment import EnvCheck
+    from angku.domain.environment import EnvCheck
 
     m = b.manifest.model_copy(update={"data_snapshot": EnvCheck(status=status, detail=detail)})
     return Bundle(spec=b.spec, manifest=m, model_state=b.model_state)
@@ -305,7 +305,7 @@ def test_old_bundle_without_data_check_says_not_recorded(spec):
 
 
 def test_metrics_are_listed_in_the_experiment_section(spec):
-    from mlops.domain.experiment import Metric
+    from angku.domain.experiment import Metric
 
     spec = spec.model_copy(update={"metrics": [Metric(name="dice", params={"include_background": False})]})
     body = _section(render_report(_fake_bundle(spec)), "Experiment")
@@ -345,7 +345,7 @@ def test_metric_never_defined_renders(spec):
 def test_resumed_run_says_where_it_was_resumed(spec):
     from dataclasses import replace
 
-    from mlops.domain.manifest import ResumePoint
+    from angku.domain.manifest import ResumePoint
 
     b = _fake_bundle(spec)
     b = replace(b, manifest=b.manifest.model_copy(update={"resumes": [ResumePoint(epoch=40), ResumePoint(epoch=80)]}))
@@ -358,7 +358,7 @@ def test_uninterrupted_run_has_no_resumed_row(bundle):
 
 
 def test_inference_is_listed_in_the_experiment_section(spec):
-    from mlops.domain.experiment import Inference
+    from angku.domain.experiment import Inference
 
     spec = spec.model_copy(update={"inference": Inference(name="sliding_window", params={"roi_size": [96, 96, 96]})})
     body = _section(render_report(_fake_bundle(spec)), "Experiment")

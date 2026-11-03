@@ -9,14 +9,14 @@ from typing import Any
 import pytest
 import torch
 
-from mlops.adapters.inmemory_tracker import InMemoryTracker
-from mlops.adapters.synthetic_data import SyntheticBlobs
-from mlops.application import RunnerError, run_experiment
-from mlops.config import load_experiment_dict, load_experiment_yaml
-from mlops.domain import UnpinnedInputError, compute_experiment_id, compute_run_id
-from mlops.domain.experiment import Dataset
-from mlops.ports.data import DataError
-from mlops.registry import AUGMENTATIONS, Params, discover
+from angku.adapters.inmemory_tracker import InMemoryTracker
+from angku.adapters.synthetic_data import SyntheticBlobs
+from angku.application import RunnerError, run_experiment
+from angku.config import load_experiment_dict, load_experiment_yaml
+from angku.domain import UnpinnedInputError, compute_experiment_id, compute_run_id
+from angku.domain.experiment import Dataset
+from angku.ports.data import DataError
+from angku.registry import AUGMENTATIONS, Params, discover
 
 CONFIGS = Path(__file__).parent.parent / "experiments/configs"
 
@@ -166,8 +166,8 @@ def test_failure_inside_epoch_marks_run_failed(spec):
 def test_swinunetr_baseline_stack_trains_on_synthetic_data():
     pytest.importorskip("monai", reason="medical extra not installed")
     pytest.importorskip("einops", reason="medical extra not installed")
-    from mlops.adapters.inmemory_artifacts import InMemoryArtifactStore
-    from mlops.application.bundle import load_bundle
+    from angku.adapters.inmemory_artifacts import InMemoryArtifactStore
+    from angku.application.bundle import load_bundle
 
     base = load_experiment_yaml(CONFIGS / "swinunetr_baseline.yaml")
     # Same model/loss/augmentations as the baseline; shrunk to run on a CPU in seconds.
@@ -206,7 +206,7 @@ _INFER_CALLS: list[tuple[int, ...]] = []
 
 
 def test_train_worker_shards_data_by_rank(spec):
-    from mlops.application.runner import Worker, train_worker
+    from angku.application.runner import Worker, train_worker
 
     seen: dict[int, list[int]] = {0: [], 1: []}
     current = {"rank": 0}
@@ -246,7 +246,7 @@ def test_train_worker_shards_data_by_rank(spec):
 
 
 def test_train_worker_single_rank_matches_run_experiment(spec):
-    from mlops.application.runner import train_worker
+    from angku.application.runner import train_worker
 
     epochs: list[tuple[int, dict[str, float]]] = []
     model, history, _ = train_worker(
@@ -258,7 +258,7 @@ def test_train_worker_single_rank_matches_run_experiment(spec):
 
 
 def test_train_worker_wrap_model_hook_is_used(spec):
-    from mlops.application.runner import train_worker
+    from angku.application.runner import train_worker
 
     wrapped: list[torch.nn.Module] = []
 
@@ -271,7 +271,7 @@ def test_train_worker_wrap_model_hook_is_used(spec):
 
 
 def test_local_launcher_is_run_experiment(spec):
-    from mlops.application.launch import LocalLauncher
+    from angku.application.launch import LocalLauncher
 
     tracker = InMemoryTracker()
     result = LocalLauncher().launch(spec, data=_data(), tracker=tracker)
@@ -283,8 +283,8 @@ def test_local_launcher_is_run_experiment(spec):
 def test_swinunetr_stack_is_reproducible_with_same_seed():
     pytest.importorskip("monai", reason="medical extra not installed")
     pytest.importorskip("einops", reason="medical extra not installed")
-    from mlops.adapters.inmemory_artifacts import InMemoryArtifactStore
-    from mlops.application.bundle import load_bundle
+    from angku.adapters.inmemory_artifacts import InMemoryArtifactStore
+    from angku.application.bundle import load_bundle
 
     base = load_experiment_yaml(CONFIGS / "swinunetr_baseline.yaml")
     spec = load_experiment_dict(
@@ -316,7 +316,7 @@ def test_swinunetr_stack_is_reproducible_with_same_seed():
 
 
 def test_seed_everything_switches_torch_deterministic_mode():
-    from mlops.application.runner import seed_everything
+    from angku.application.runner import seed_everything
 
     seed_everything(0, deterministic=True)
     assert torch.are_deterministic_algorithms_enabled()
@@ -331,8 +331,8 @@ def test_seed_everything_switches_torch_deterministic_mode():
 
 
 def test_probe_result_is_recorded_in_the_manifest(spec):
-    from mlops.adapters.inmemory_artifacts import InMemoryArtifactStore
-    from mlops.application.bundle import load_bundle
+    from angku.adapters.inmemory_artifacts import InMemoryArtifactStore
+    from angku.application.bundle import load_bundle
     from tests.test_environment import FixedProbe
 
     store = InMemoryArtifactStore()
@@ -346,8 +346,8 @@ def test_probe_result_is_recorded_in_the_manifest(spec):
 
 
 def test_failed_run_still_records_the_environment(spec):
-    from mlops.adapters.inmemory_artifacts import InMemoryArtifactStore
-    from mlops.application.bundle import load_bundle
+    from angku.adapters.inmemory_artifacts import InMemoryArtifactStore
+    from angku.application.bundle import load_bundle
     from tests.test_environment import FixedProbe
 
     bad = spec.model_copy(
@@ -361,8 +361,8 @@ def test_failed_run_still_records_the_environment(spec):
 
 
 def test_without_probe_no_environment_is_recorded(spec):
-    from mlops.adapters.inmemory_artifacts import InMemoryArtifactStore
-    from mlops.application.bundle import load_bundle
+    from angku.adapters.inmemory_artifacts import InMemoryArtifactStore
+    from angku.application.bundle import load_bundle
 
     store = InMemoryArtifactStore()
     r = run_experiment(spec, data=_data(), tracker=InMemoryTracker(), artifacts=store)
@@ -370,7 +370,7 @@ def test_without_probe_no_environment_is_recorded(spec):
 
 
 def test_manifest_written_before_environment_records_still_loads():
-    from mlops.domain import RunManifest
+    from angku.domain import RunManifest
 
     old = '{"experiment_id": "e", "run_id": "r", "attempt": 1, "status": "FINISHED", "device": "cpu", "history": []}'
     assert RunManifest.model_validate_json(old).environment is None
@@ -378,8 +378,8 @@ def test_manifest_written_before_environment_records_still_loads():
 
 
 def test_manifest_records_the_local_launcher(spec):
-    from mlops.adapters.inmemory_artifacts import InMemoryArtifactStore
-    from mlops.application.bundle import load_bundle
+    from angku.adapters.inmemory_artifacts import InMemoryArtifactStore
+    from angku.application.bundle import load_bundle
 
     store = InMemoryArtifactStore()
     r = run_experiment(spec, data=_data(), tracker=InMemoryTracker(), artifacts=store)
@@ -418,7 +418,7 @@ def test_metrics_do_not_change_training(spec):
 
 
 def test_metric_mean_is_over_samples_where_defined(spec):
-    from mlops.registry import METRICS
+    from angku.registry import METRICS
 
     class _NoParams(Params):
         pass
@@ -444,7 +444,7 @@ def test_metric_mean_is_over_samples_where_defined(spec):
 
 
 def test_metric_undefined_everywhere_is_nan(spec):
-    from mlops.registry import METRICS
+    from angku.registry import METRICS
 
     class _NoParams(Params):
         pass
@@ -476,7 +476,7 @@ def test_metric_key_clash_is_refused(spec):
 
 
 def test_unknown_metric_name_is_refused(spec):
-    from mlops.registry import RegistryError
+    from angku.registry import RegistryError
 
     spec = _with_metrics(spec, [{"name": "dcie", "params": {}}])
     with pytest.raises(RegistryError, match="unknown metric 'dcie'"):
@@ -487,7 +487,7 @@ def test_unknown_metric_name_is_refused(spec):
 
 
 def _register_counting_inferer(calls: list[tuple[int, ...]]) -> None:
-    from mlops.registry import INFERERS
+    from angku.registry import INFERERS
 
     class _NoParams(Params):
         pass
@@ -521,7 +521,7 @@ def test_inferer_replaces_the_plain_forward_on_validation(spec):
 
 
 def test_unknown_inferer_is_refused_before_the_run_starts(spec):
-    from mlops.registry import RegistryError
+    from angku.registry import RegistryError
 
     spec = load_experiment_dict({**spec.model_dump(), "inference": {"name": "sliding_windw", "params": {}}})
     tracker = InMemoryTracker()
@@ -554,7 +554,7 @@ def test_sliding_window_validation_end_to_end(spec):
 
 @pytest.mark.parametrize("n,world_size", [(5, 2), (2, 2), (1, 3), (9, 4), (0, 2)])
 def test_val_shards_cover_every_case_exactly_once(n, world_size):
-    from mlops.application.runner import ShardSampler
+    from angku.application.runner import ShardSampler
 
     shards = [list(ShardSampler(n, rank=r, world_size=world_size)) for r in range(world_size)]
     assert sorted(i for s in shards for i in s) == list(range(n))

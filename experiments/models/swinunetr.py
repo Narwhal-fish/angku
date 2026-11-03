@@ -14,7 +14,7 @@ from __future__ import annotations
 from pydantic import Field
 from torch import nn
 
-from mlops.registry import MODELS, Params
+from angku.registry import MODELS, Params
 
 
 class SwinUNETRParams(Params):

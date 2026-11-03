@@ -12,14 +12,14 @@ from pathlib import Path
 import pytest
 import torch
 
-from mlops.adapters.inmemory_artifacts import InMemoryArtifactStore
-from mlops.adapters.inmemory_tracker import InMemoryTracker
-from mlops.adapters.synthetic_data import SyntheticBlobs
-from mlops.application import RunnerError, run_experiment
-from mlops.application.bundle import CHECKPOINT, MANIFEST, load_bundle, load_checkpoint
-from mlops.application.reproduce import reproduce_run
-from mlops.config import load_experiment_dict, load_experiment_yaml
-from mlops.registry import discover
+from angku.adapters.inmemory_artifacts import InMemoryArtifactStore
+from angku.adapters.inmemory_tracker import InMemoryTracker
+from angku.adapters.synthetic_data import SyntheticBlobs
+from angku.application import RunnerError, run_experiment
+from angku.application.bundle import CHECKPOINT, MANIFEST, load_bundle, load_checkpoint
+from angku.application.reproduce import reproduce_run
+from angku.config import load_experiment_dict, load_experiment_yaml
+from angku.registry import discover
 
 CONFIGS = Path(__file__).parent.parent / "experiments/configs"
 
@@ -246,7 +246,7 @@ def test_checkpoint_of_another_run_is_refused(spec):
     _interrupt(spec, store)
     run_id = next(iter(store._runs))
     other = spec.model_copy(update={"training": spec.training.model_copy(update={"seed": 1})})
-    from mlops.domain import compute_experiment_id, compute_run_id
+    from angku.domain import compute_experiment_id, compute_run_id
 
     other_id = compute_run_id(compute_experiment_id(other), other.resources, 1)
     store.put(other_id, CHECKPOINT, store.get(run_id, CHECKPOINT))

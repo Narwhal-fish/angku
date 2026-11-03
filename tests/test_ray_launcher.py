@@ -14,16 +14,16 @@ pytest.importorskip("ray.train")
 import ray  # noqa: E402
 from ray.train import TrainingFailedError  # noqa: E402
 
-from mlops.adapters.inmemory_artifacts import InMemoryArtifactStore  # noqa: E402
-from mlops.adapters.inmemory_tracker import InMemoryTracker  # noqa: E402
-from mlops.adapters.ray_launcher import RayLauncher  # noqa: E402
-from mlops.adapters.synthetic_data import SyntheticBlobs  # noqa: E402
-from mlops.application import RunnerError, run_experiment  # noqa: E402
-from mlops.application.bundle import load_bundle  # noqa: E402
-from mlops.config import load_experiment_dict, load_experiment_yaml  # noqa: E402
-from mlops.domain import FORMAT_VERSION, compute_experiment_id, compute_run_id  # noqa: E402
-from mlops.domain.best import BestCriterion, best_record  # noqa: E402
-from mlops.registry import discover  # noqa: E402
+from angku.adapters.inmemory_artifacts import InMemoryArtifactStore  # noqa: E402
+from angku.adapters.inmemory_tracker import InMemoryTracker  # noqa: E402
+from angku.adapters.ray_launcher import RayLauncher  # noqa: E402
+from angku.adapters.synthetic_data import SyntheticBlobs  # noqa: E402
+from angku.application import RunnerError, run_experiment  # noqa: E402
+from angku.application.bundle import load_bundle  # noqa: E402
+from angku.config import load_experiment_dict, load_experiment_yaml  # noqa: E402
+from angku.domain import FORMAT_VERSION, compute_experiment_id, compute_run_id  # noqa: E402
+from angku.domain.best import BestCriterion, best_record  # noqa: E402
+from angku.registry import discover  # noqa: E402
 
 CONFIGS = Path(__file__).parent.parent / "experiments/configs"
 
@@ -119,7 +119,7 @@ def test_two_cpu_workers_split_the_global_batch(launcher):
     bundle = load_bundle(store, result.run_id)
     assert bundle.manifest.status == "FINISHED"
     assert bundle.spec == spec
-    from mlops.registry import MODELS
+    from angku.registry import MODELS
 
     MODELS.build(spec.model.name, spec.model.params).load_state_dict(bundle.model_state, strict=True)
 
@@ -162,7 +162,7 @@ def test_environment_is_captured_on_the_training_worker(launcher):
 
 
 def test_wrong_data_never_starts_a_ray_run(launcher):
-    from mlops.ports.data import DataError
+    from angku.ports.data import DataError
     from tests.test_data_snapshot import A, B, HashedBlobs
 
     spec = _spec(workers=1, **{"dataset.snapshot": A})
@@ -176,7 +176,7 @@ def test_wrong_data_never_starts_a_ray_run(launcher):
 def test_metrics_are_aggregated_over_every_rank(launcher, n_val):
     # n_val=3 on 2 ranks: DistributedSampler would pad by repeating a case, counting it twice.
     # Every val case must count exactly once, as in a single-process run.
-    from mlops.registry import LOSSES, METRICS, MODELS
+    from angku.registry import LOSSES, METRICS, MODELS
 
     spec = load_experiment_dict({**_spec(workers=2).model_dump(), "metrics": [{"name": "dice", "params": {}}]})
     store = InMemoryArtifactStore()
@@ -232,7 +232,7 @@ class GatedBlobs(SyntheticBlobs):
         self.gate, self.fail = gate, fail
 
     def load(self, dataset, preprocessing):
-        from mlops.ports.data import DataSplits
+        from angku.ports.data import DataSplits
 
         splits = super().load(dataset, preprocessing)
         return DataSplits(train=_Gate(splits.train, self.gate, self.fail), val=splits.val)
@@ -278,7 +278,7 @@ def test_failed_ray_run_keeps_the_epochs_it_finished(launcher, tmp_path):
 def test_relay_logs_in_order_and_drains_on_stop():
     import queue
 
-    from mlops.adapters.ray_launcher import MetricsRelay
+    from angku.adapters.ray_launcher import MetricsRelay
 
     q: queue.Queue = queue.Queue()
     tracker = InMemoryTracker()
@@ -296,7 +296,7 @@ def test_relay_logs_in_order_and_drains_on_stop():
 def test_relay_survives_a_tracker_error_and_reraises_it_on_stop():
     import queue
 
-    from mlops.adapters.ray_launcher import MetricsRelay
+    from angku.adapters.ray_launcher import MetricsRelay
 
     class Broken(InMemoryTracker):
         def log_metrics(self, metrics, *, step):
@@ -337,7 +337,7 @@ class FailOnceBlobs(SyntheticBlobs):
         self.after, self.marker = after, marker
 
     def load(self, dataset, preprocessing):
-        from mlops.ports.data import DataSplits
+        from angku.ports.data import DataSplits
 
         splits = super().load(dataset, preprocessing)
         return DataSplits(train=_FailOnce(splits.train, self.after, self.marker), val=splits.val)
@@ -400,7 +400,7 @@ def test_ray_run_resumes_from_its_checkpoint_bit_exactly(tmp_path):
 
 
 def test_ray_checkpointing_records_how_to_resume(tmp_path):
-    from mlops.application.bundle import LAUNCH, load_launch
+    from angku.application.bundle import LAUNCH, load_launch
 
     store = InMemoryArtifactStore()
     result = RayLauncher(storage_path=tmp_path / "ray").launch(
@@ -413,7 +413,7 @@ def test_ray_checkpointing_records_how_to_resume(tmp_path):
 
 
 def _ray_run_dir(storage, run_id):
-    return Path(storage) / f"mlops-{run_id[:12]}-a1"
+    return Path(storage) / f"angku-{run_id[:12]}-a1"
 
 
 def test_finished_ray_run_drops_its_ray_storage(tmp_path):
@@ -443,7 +443,7 @@ def test_ray_keeps_only_the_latest_checkpoint(tmp_path):
 
 
 def test_ray_resume_with_another_keep_best_is_refused(tmp_path):
-    from mlops.application.bundle import LaunchRecord, save_launch
+    from angku.application.bundle import LaunchRecord, save_launch
 
     store, spec = InMemoryArtifactStore(), _spec(workers=1)
     run_id = compute_run_id(compute_experiment_id(spec), spec.resources, 1)
@@ -492,7 +492,7 @@ def test_ray_checkpoint_and_resume_need_an_artifact_store(launcher, kw):
 def test_relay_keeps_history_only_items_out_of_the_tracker():
     import queue
 
-    from mlops.adapters.ray_launcher import MetricsRelay
+    from angku.adapters.ray_launcher import MetricsRelay
 
     q: queue.Queue = queue.Queue()
     tracker = InMemoryTracker()
@@ -515,7 +515,7 @@ def test_two_worker_ray_run_is_reproduced_bit_exactly_through_the_cli(tmp_path, 
 
     import yaml
 
-    from mlops.cli import main
+    from angku.cli import main
 
     spec = _spec(workers=2, **{"training.epochs": 2})
     path = tmp_path / "two_workers.yaml"

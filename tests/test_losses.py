@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from mlops.registry import LOSSES, RegistryError, discover
+from angku.registry import LOSSES, RegistryError, discover
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -57,7 +57,7 @@ def test_dice_ce_from_baseline_yaml_computes_and_backprops():
     pytest.importorskip("monai", reason="medical extra not installed")
     from pathlib import Path
 
-    from mlops.config import load_experiment_yaml
+    from angku.config import load_experiment_yaml
 
     spec = load_experiment_yaml(Path(__file__).parent.parent / "experiments/configs/swinunetr_baseline.yaml")
     loss_fn = LOSSES.build(spec.loss.name, spec.loss.params)

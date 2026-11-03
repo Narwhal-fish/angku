@@ -16,7 +16,7 @@ from typing import Literal
 from pydantic import Field, field_validator
 from torch import Tensor, nn
 
-from mlops.registry import INFERERS, Params
+from angku.registry import INFERERS, Params
 
 
 class SlidingWindowParams(Params):

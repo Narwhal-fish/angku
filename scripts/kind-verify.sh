@@ -11,15 +11,15 @@
 #
 #   scripts/kind-verify.sh [--skip-build]       (--skip-build: reuse the last pushed image)
 #
-# Needs a clean checkout: the image bakes MLOPS_GIT_COMMIT=HEAD (build-image.sh refuses otherwise).
+# Needs a clean checkout: the image bakes ANGKU_GIT_COMMIT=HEAD (build-image.sh refuses otherwise).
 # Writes the spec it runs to .kind/tiny_cnn_kind.yaml, bundles to .kind/artifacts. Each finished
 # RayJob is deleted after its checks: KubeRay keeps the cluster for ttlSecondsAfterFinished, and
 # two clusters do not fit on one laptop. Exit 0 = every check passed.
 set -euo pipefail
 
-CLUSTER="${MLOPS_KIND_CLUSTER:-mlops}"
+CLUSTER="${ANGKU_KIND_CLUSTER:-angku}"
 KUBECTL="kubectl --context kind-$CLUSTER"
-IMAGE=localhost:5001/mlops-train:kind
+IMAGE=localhost:5001/angku-train:kind
 EPOCHS="${EPOCHS:-40}"
 KILL_AT_EPOCH="${KILL_AT_EPOCH:-8}"
 
@@ -28,9 +28,9 @@ cd "$root"
 PY="$root/.venv/bin/python"
 SPEC=.kind/tiny_cnn_kind.yaml
 ART=.kind/artifacts
-PVCS=(--artifacts-pvc mlops-artifacts --ray-storage-pvc mlops-ray-storage)
+PVCS=(--artifacts-pvc angku-artifacts --ray-storage-pvc angku-ray-storage)
 STATUSES=.kind/job-statuses.txt
-angku() { "$PY" -m mlops "$@"; }
+angku() { "$PY" -m angku "$@"; }
 step() { echo; echo "== $*"; }
 submitted() { sed -n 's/^submitted RayJob \([^ ]*\) .*/\1/p'; }
 
@@ -65,8 +65,8 @@ print(r["status"] + (" resumable" if r["resumable"] else " -") if r else "ABSENT
 
 run_id() {  # ATTEMPT -> run_id of $SPEC
     "$PY" -c 'import sys
-from mlops.config import load_experiment_yaml
-from mlops.domain import compute_experiment_id, compute_run_id
+from angku.config import load_experiment_yaml
+from angku.domain import compute_experiment_id, compute_run_id
 s = load_experiment_yaml(sys.argv[1]); print(compute_run_id(compute_experiment_id(s), s.resources, int(sys.argv[2])))' "$SPEC" "$1"
 }
 
@@ -91,7 +91,7 @@ commit, digest, epochs, out = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.ar
 d = yaml.safe_load(open("experiments/configs/tiny_cnn_smoke.yaml"))
 d["meta"]["name"] = "tiny-cnn-kind"
 d["code"]["commit"] = commit
-d["environment"] = {"image": "localhost:5001/mlops-train", "image_digest": digest}
+d["environment"] = {"image": "localhost:5001/angku-train", "image_digest": digest}
 d["training"]["epochs"] = epochs
 d["resources"] = {"gpu": 0, "cpu": 1, "memory": "2Gi", "workers": 2}
 d["tracking"] = {"backend": "mlflow", "experiment_name": "kind", "uri": "sqlite:////artifacts/mlflow.db"}
@@ -101,7 +101,7 @@ RUN_A="$(run_id 1)"; RUN_B="$(run_id 2)"
 echo "run A $RUN_A"; echo "run B $RUN_B"
 # A rerun starts clean: this script's own earlier bundles and Ray checkpoints of these two runs.
 for run in "$RUN_A" "$RUN_B"; do
-    rm -rf "${ART:?}/$run" ".kind/ray-storage/mlops-${run:0:12}-a"*
+    rm -rf "${ART:?}/$run" ".kind/ray-storage/angku-${run:0:12}-a"*
 done
 
 step "run A: submit, kill at epoch $KILL_AT_EPOCH"
@@ -141,8 +141,8 @@ FINAL_B="$(wait_job "$JOB_B")"
 LOGS_B="$(angku rayjob-logs "$JOB_B" --kubectl "$KUBECTL" 2>&1 || true)"
 UI_JOBS="$("$PY" - "$ART" "$KUBECTL" <<'EOF'
 import sys
-from mlops.adapters.local_artifacts import LocalArtifactStore
-from mlops.cli import _ui_actions, build_parser
+from angku.adapters.local_artifacts import LocalArtifactStore
+from angku.cli import _ui_actions, build_parser
 args = build_parser().parse_args(["ui", "--artifacts", sys.argv[1], "--kubectl", sys.argv[2]])
 print(" ".join(j.run_id or "-" for j in _ui_actions(args, LocalArtifactStore(sys.argv[1])).rayjobs()))
 EOF
@@ -190,7 +190,7 @@ for label, m in (("A", a), ("B", b)):
     checks = {k: v["status"] for k, v in env["checks"].items()}
     check(f"{label}: code.commit + image_digest verified in the pod",
           checks.get("code.commit") == "ok" and checks.get("environment.image_digest") == "ok", str(checks))
-    check(f"{label}: MLOPS_IMAGE_DIGEST reached the pod", env["actual"]["image_digest"] == digest,
+    check(f"{label}: ANGKU_IMAGE_DIGEST reached the pod", env["actual"]["image_digest"] == digest,
           str(env["actual"]["image_digest"]))
 check("no progress.json left behind",
       not (Path(art) / run_a / "progress.json").exists() and not (Path(art) / run_b / "progress.json").exists())

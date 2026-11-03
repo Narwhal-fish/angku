@@ -10,15 +10,15 @@ from pathlib import Path
 
 import pytest
 
-from mlops.adapters.inmemory_artifacts import InMemoryArtifactStore
-from mlops.adapters.inmemory_tracker import InMemoryTracker
-from mlops.adapters.synthetic_data import SyntheticBlobs
-from mlops.application import run_experiment
-from mlops.application.bundle import MANIFEST, MODEL
-from mlops.application.listing import group_by_experiment, list_runs
-from mlops.config import load_experiment_yaml
-from mlops.domain import compute_experiment_id
-from mlops.registry import discover
+from angku.adapters.inmemory_artifacts import InMemoryArtifactStore
+from angku.adapters.inmemory_tracker import InMemoryTracker
+from angku.adapters.synthetic_data import SyntheticBlobs
+from angku.application import run_experiment
+from angku.application.bundle import MANIFEST, MODEL
+from angku.application.listing import group_by_experiment, list_runs
+from angku.config import load_experiment_yaml
+from angku.domain import compute_experiment_id
+from angku.registry import discover
 
 CONFIGS = Path(__file__).parent.parent / "experiments/configs"
 
@@ -95,7 +95,7 @@ def test_failed_run_is_listed(spec, store):
 
 
 def test_killed_run_with_checkpoint_is_interrupted_and_resumable(spec, store):
-    from mlops.application.bundle import CHECKPOINT
+    from angku.application.bundle import CHECKPOINT
 
     run_id = _run(store, spec, checkpoint_every=1, keep_checkpoint=True)  # as if it never finished
     store._runs[run_id].pop(MANIFEST)
@@ -173,7 +173,7 @@ def test_groups_follow_list_order(spec, store):
 
 
 def test_killed_ray_run_with_launch_record_is_resumable(spec, store):
-    from mlops.application.bundle import LaunchRecord, save_launch
+    from angku.application.bundle import LaunchRecord, save_launch
 
     run_id = _run(store, spec)
     store._runs[run_id].pop(MANIFEST)
@@ -226,7 +226,7 @@ def test_nan_agrees_only_with_nan_whatever_the_tolerance(spec, store):
 
 
 def test_summary_carries_the_keep_best_record(spec, store):
-    from mlops.domain.best import BestCriterion
+    from angku.domain.best import BestCriterion
 
     _run(store, spec, keep_best=BestCriterion(metric="val/loss", mode="min"))
     (s,) = list_runs(store)

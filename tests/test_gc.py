@@ -9,13 +9,13 @@ from pathlib import Path
 
 import pytest
 
-from mlops.adapters.inmemory_artifacts import InMemoryArtifactStore
-from mlops.adapters.inmemory_tracker import InMemoryTracker
-from mlops.adapters.local_artifacts import LocalArtifactStore
-from mlops.adapters.ray_storage import LocalRayStorage
-from mlops.adapters.synthetic_data import SyntheticBlobs
-from mlops.application import run_experiment
-from mlops.application.bundle import (
+from angku.adapters.inmemory_artifacts import InMemoryArtifactStore
+from angku.adapters.inmemory_tracker import InMemoryTracker
+from angku.adapters.local_artifacts import LocalArtifactStore
+from angku.adapters.ray_storage import LocalRayStorage
+from angku.adapters.synthetic_data import SyntheticBlobs
+from angku.application import run_experiment
+from angku.application.bundle import (
     CHECKPOINT,
     MANIFEST,
     MODEL,
@@ -24,15 +24,15 @@ from mlops.application.bundle import (
     ray_run_name,
     save_launch,
 )
-from mlops.application.gc import GcError, GcPolicy, apply_gc, format_bytes, gc_lines, plan_gc
-from mlops.application.listing import list_runs
-from mlops.application.predict import ensemble_runs, load_result, predict_run
-from mlops.application.progress import PROGRESS, Progress, save_progress
-from mlops.application.reproduce import reproduce_run
-from mlops.cli import build_parser, main
-from mlops.config import load_experiment_yaml
-from mlops.domain import compute_experiment_id
-from mlops.registry import discover
+from angku.application.gc import GcError, GcPolicy, apply_gc, format_bytes, gc_lines, plan_gc
+from angku.application.listing import list_runs
+from angku.application.predict import ensemble_runs, load_result, predict_run
+from angku.application.progress import PROGRESS, Progress, save_progress
+from angku.application.reproduce import reproduce_run
+from angku.cli import build_parser, main
+from angku.config import load_experiment_yaml
+from angku.domain import compute_experiment_id
+from angku.registry import discover
 
 CONFIGS = Path(__file__).parent.parent / "experiments/configs"
 NOW = 1_000_000.0

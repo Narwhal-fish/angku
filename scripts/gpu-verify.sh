@@ -27,7 +27,7 @@ cd "$root"
 PY="$root/.venv/bin/python"
 SPEC=.gpu/tiny_cnn_gpu.yaml
 ART=.gpu/artifacts
-angku() { "$PY" -m mlops "$@"; }
+angku() { "$PY" -m angku "$@"; }
 step() { echo; echo "== $*"; }
 
 step "GPU"
@@ -75,13 +75,13 @@ import os
 import signal
 import sys
 
-from mlops.adapters.inmemory_tracker import InMemoryTracker
-from mlops.adapters.local_artifacts import LocalArtifactStore
-from mlops.adapters.local_environment import LocalEnvironmentProbe
-from mlops.adapters.synthetic_data import SyntheticBlobs
-from mlops.application import run_experiment
-from mlops.config import load_experiment_yaml
-from mlops.registry import discover
+from angku.adapters.inmemory_tracker import InMemoryTracker
+from angku.adapters.local_artifacts import LocalArtifactStore
+from angku.adapters.local_environment import LocalEnvironmentProbe
+from angku.adapters.synthetic_data import SyntheticBlobs
+from angku.application import run_experiment
+from angku.config import load_experiment_yaml
+from angku.registry import discover
 
 spec_path, art, kill_at = sys.argv[1], sys.argv[2], int(sys.argv[3])
 
@@ -111,8 +111,8 @@ KILL_EXIT=$?
 set -e
 echo "exit $KILL_EXIT (137 = SIGKILL)"
 RUN_B="$("$PY" -c 'import sys
-from mlops.config import load_experiment_yaml
-from mlops.domain import compute_experiment_id, compute_run_id
+from angku.config import load_experiment_yaml
+from angku.domain import compute_experiment_id, compute_run_id
 s = load_experiment_yaml(sys.argv[1]); print(compute_run_id(compute_experiment_id(s), s.resources, 2))' "$SPEC")"
 echo "run B = $RUN_B"
 angku list --artifacts "$ART" --json > .gpu/list_killed.json
@@ -173,8 +173,8 @@ same = wa.keys() == wb.keys() and all(torch.equal(wa[k], wb[k]) for k in wa)
 check("weights: resumed B == uninterrupted A (torch.equal)", same, f"{len(wa)} tensors")
 check("no checkpoint.pt left behind", not (art / run_b / "checkpoint.pt").exists())
 
-from mlops.application.runner import seed_everything  # noqa: E402
-from mlops.registry import LOSSES, discover  # noqa: E402
+from angku.application.runner import seed_everything  # noqa: E402
+from angku.registry import LOSSES, discover  # noqa: E402
 
 discover("experiments.losses")
 seed_everything(0, deterministic=True)

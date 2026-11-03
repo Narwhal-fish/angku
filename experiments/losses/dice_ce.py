@@ -19,8 +19,8 @@ from typing import Literal
 from pydantic import Field
 from torch import Tensor, nn
 
+from angku.registry import LOSSES, Params
 from experiments.losses._cross_entropy import CrossEntropy
-from mlops.registry import LOSSES, Params
 
 
 class DiceCEParams(Params):

@@ -7,9 +7,9 @@ from pathlib import Path
 
 import pytest
 
-from mlops.adapters.kuberay import KubeRayError, image_ref, render_rayjob, submit_rayjob
-from mlops.config import load_experiment_dict, load_experiment_yaml
-from mlops.domain import ExperimentSpec, UnpinnedInputError, compute_experiment_id, compute_run_id
+from angku.adapters.kuberay import KubeRayError, image_ref, render_rayjob, submit_rayjob
+from angku.config import load_experiment_dict, load_experiment_yaml
+from angku.domain import ExperimentSpec, UnpinnedInputError, compute_experiment_id, compute_run_id
 
 CONFIGS = Path(__file__).parent.parent / "experiments/configs"
 DIGEST = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
@@ -38,7 +38,7 @@ def _containers(rayjob):
 
 @pytest.mark.parametrize(
     "image",
-    ["ghcr.io/example/mlops-train:0.1.0", "ghcr.io/example/mlops-train", "localhost:5000/train:v2", "train:latest"],
+    ["ghcr.io/example/angku-train:0.1.0", "ghcr.io/example/angku-train", "localhost:5000/train:v2", "train:latest"],
 )
 def test_image_ref_replaces_tag_with_digest(image):
     ref = image_ref(image, DIGEST)
@@ -59,17 +59,17 @@ def test_render_produces_configmap_and_rayjob(spec):
     eid = compute_experiment_id(spec)
     rid = compute_run_id(eid, spec.resources, attempt=1)
     assert job["apiVersion"] == "ray.io/v1"
-    assert job["metadata"]["name"] == f"mlops-{rid[:12]}-a1"
+    assert job["metadata"]["name"] == f"angku-{rid[:12]}-a1"
     assert job["metadata"]["namespace"] == "default"
-    assert job["metadata"]["annotations"] == {"mlops.io/experiment-id": eid, "mlops.io/run-id": rid}
-    assert job["metadata"]["labels"]["mlops.io/experiment"] == "swinunetr-baseline"
+    assert job["metadata"]["annotations"] == {"angku.io/experiment-id": eid, "angku.io/run-id": rid}
+    assert job["metadata"]["labels"]["angku.io/experiment"] == "swinunetr-baseline"
     assert cm["metadata"]["name"] == job["metadata"]["name"]
 
     # the spec rides along verbatim as JSON (a YAML subset, so `angku run` reads it as-is)
     assert ExperimentSpec.model_validate_json(cm["data"]["experiment.json"]) == spec
 
     entry = job["spec"]["entrypoint"]
-    assert entry.startswith("angku run /etc/mlops/experiment.json")
+    assert entry.startswith("angku run /etc/angku/experiment.json")
     assert "--launcher ray" in entry and "--attempt 1" in entry and "--artifacts /artifacts" in entry
 
 
@@ -117,7 +117,7 @@ def test_render_options(spec):
         assert names["artifacts"]["persistentVolumeClaim"]["claimName"] == "runs-pvc"
         assert names["experiment"]["configMap"]["name"] == cm["metadata"]["name"]
     mounts = {m["name"]: m["mountPath"] for m in head["volumeMounts"]}
-    assert mounts == {"artifacts": "/mnt/runs", "experiment": "/etc/mlops"}
+    assert mounts == {"artifacts": "/mnt/runs", "experiment": "/etc/angku"}
 
 
 def test_render_refuses_unpinned_spec(spec):
@@ -180,7 +180,7 @@ def test_pods_know_which_image_they_run_in(spec):
     head, _, worker = _containers(rayjob)
     for c in (head, worker):
         env = {e["name"]: e["value"] for e in c.get("env", [])}
-        assert env["MLOPS_IMAGE_DIGEST"] == spec.environment.image_digest
+        assert env["ANGKU_IMAGE_DIGEST"] == spec.environment.image_digest
 
 
 # --- following a submitted RayJob: status via `kubectl get`, logs via `kubectl logs` ---
@@ -191,9 +191,9 @@ def _rayjob_json(job_status="RUNNING", deployment="Running", message="", **statu
         {
             "kind": "RayJob",
             "metadata": {
-                "name": "mlops-abc-a1",
+                "name": "angku-abc-a1",
                 "namespace": "ml",
-                "annotations": {"mlops.io/run-id": "r" * 64, "mlops.io/experiment-id": "e" * 64},
+                "annotations": {"angku.io/run-id": "r" * 64, "angku.io/experiment-id": "e" * 64},
             },
             "status": {
                 "jobStatus": job_status,
@@ -223,12 +223,12 @@ class _FakeGet:
 
 
 def test_status_reads_the_rayjob_through_kubectl():
-    from mlops.adapters.kuberay import rayjob_status
+    from angku.adapters.kuberay import rayjob_status
 
     kubectl = _FakeGet(_rayjob_json(endTime="2026-10-13T11:00:00Z", job_status="SUCCEEDED", deployment="Complete"))
-    s = rayjob_status("mlops-abc-a1", namespace="ml", kubectl=["kubectl", "--context", "x"], run=kubectl)
+    s = rayjob_status("angku-abc-a1", namespace="ml", kubectl=["kubectl", "--context", "x"], run=kubectl)
     ((cmd, kw),) = kubectl.calls
-    assert cmd == ["kubectl", "--context", "x", "get", "rayjob", "mlops-abc-a1", "-n", "ml", "-o", "json"]
+    assert cmd == ["kubectl", "--context", "x", "get", "rayjob", "angku-abc-a1", "-n", "ml", "-o", "json"]
     assert kw["capture_output"] is True
     assert s.job_status == "SUCCEEDED" and s.deployment_status == "Complete"
     assert s.run_id == "r" * 64 and s.experiment_id == "e" * 64
@@ -248,39 +248,39 @@ def test_status_reads_the_rayjob_through_kubectl():
     ],
 )
 def test_status_terminal_states(job, finished, succeeded):
-    from mlops.adapters.kuberay import rayjob_status
+    from angku.adapters.kuberay import rayjob_status
 
     s = rayjob_status("x", run=_FakeGet(_rayjob_json(job_status=job)))
     assert (s.finished, s.succeeded) == (finished, succeeded)
 
 
 def test_status_of_a_fresh_job_without_status_block():
-    from mlops.adapters.kuberay import rayjob_status
+    from angku.adapters.kuberay import rayjob_status
 
     s = rayjob_status("x", run=_FakeGet(json.dumps({"kind": "RayJob", "metadata": {"name": "x"}})))
     assert s.job_status == "" and not s.finished and s.run_id is None
 
 
 def test_status_reports_kubectl_failure():
-    from mlops.adapters.kuberay import rayjob_status
+    from angku.adapters.kuberay import rayjob_status
 
     with pytest.raises(KubeRayError, match="NotFound"):
         rayjob_status("x", run=_FakeGet(returncode=1, stderr='Error from server (NotFound): rayjobs "x" not found'))
 
 
 def test_logs_stream_the_submitter_job_without_capturing():
-    from mlops.adapters.kuberay import follow_rayjob_logs
+    from angku.adapters.kuberay import follow_rayjob_logs
 
     kubectl = _FakeGet()
-    assert follow_rayjob_logs("mlops-abc-a1", namespace="ml", follow=True, run=kubectl) == 0
+    assert follow_rayjob_logs("angku-abc-a1", namespace="ml", follow=True, run=kubectl) == 0
     ((cmd, kw),) = kubectl.calls
     # KubeRay submits through a Kubernetes Job named like the RayJob; its pod tails the driver log.
-    assert cmd == ["kubectl", "logs", "-n", "ml", "job/mlops-abc-a1", "--follow"]
+    assert cmd == ["kubectl", "logs", "-n", "ml", "job/angku-abc-a1", "--follow"]
     assert not kw.get("capture_output")
 
 
 def test_logs_without_follow_and_exit_code_passthrough():
-    from mlops.adapters.kuberay import follow_rayjob_logs
+    from angku.adapters.kuberay import follow_rayjob_logs
 
     kubectl = _FakeGet(returncode=1)
     assert follow_rayjob_logs("x", run=kubectl) == 1
@@ -389,13 +389,13 @@ def test_resume_job_runs_angku_resume_for_the_same_run(spec):
     rid = compute_run_id(compute_experiment_id(spec), spec.resources, attempt=2)
     assert job["kind"] == "RayJob"
     assert job["metadata"]["annotations"] == fresh["metadata"]["annotations"]
-    assert job["metadata"]["annotations"]["mlops.io/run-id"] == rid
+    assert job["metadata"]["annotations"]["angku.io/run-id"] == rid
     # Kubernetes picks a fresh suffix per resume: the first RayJob (and earlier resumes) may
     # still exist, finished, and no one has to delete them first.
     assert "name" not in job["metadata"]
     assert job["metadata"]["generateName"] == fresh["metadata"]["name"] + "-resume-"
     # one selectable label ties every job of a run together (annotations cannot be selected)
-    assert job["metadata"]["labels"]["mlops.io/run"] == fresh["metadata"]["labels"]["mlops.io/run"] == rid[:32]
+    assert job["metadata"]["labels"]["angku.io/run"] == fresh["metadata"]["labels"]["angku.io/run"] == rid[:32]
     entry = job["spec"]["entrypoint"]
     assert entry.startswith(f"angku resume {rid} --artifacts /artifacts")
     assert "--data-root /data" in entry and "--mlflow-uri" not in entry
@@ -421,7 +421,7 @@ def test_resume_job_can_change_the_checkpoint_interval(spec):
 @pytest.mark.parametrize("mode", [{"checkpoint_every": 3}, {"resume": True, "checkpoint_every": 3}])
 def test_entrypoint_is_accepted_by_the_angku_cli(spec, mode):
     # The in-cluster command must parse with the very CLI it calls: no flag drift.
-    from mlops.cli import build_parser
+    from angku.cli import build_parser
 
     job = _by_kind(_resumable(spec, mlflow_uri="http://mlflow:5000", **mode), "RayJob")
     argv = job["spec"]["entrypoint"].split()
@@ -432,37 +432,37 @@ def test_entrypoint_is_accepted_by_the_angku_cli(spec, mode):
 
 def test_resume_job_is_created_and_its_generated_name_returned(spec):
     # `apply` cannot handle generateName; `create -o name` prints the name Kubernetes chose.
-    kubectl = _FakeKubectl(stdout="rayjob.ray.io/mlops-abc-a1-resume-x8k2p\n")
+    kubectl = _FakeKubectl(stdout="rayjob.ray.io/angku-abc-a1-resume-x8k2p\n")
     name = submit_rayjob(_resumable(spec, resume=True), run=kubectl)
     ((cmd, _),) = kubectl.calls
     assert cmd == ["kubectl", "create", "-n", "default", "-o", "name", "-f", "-"]
-    assert name == "mlops-abc-a1-resume-x8k2p"
+    assert name == "angku-abc-a1-resume-x8k2p"
 
 
 def test_active_rayjobs_of_a_run_are_found_by_label(spec):
-    from mlops.adapters.kuberay import active_rayjobs
+    from angku.adapters.kuberay import active_rayjobs
 
     listing = json.dumps(
         {
             "kind": "List",
             "items": [
-                json.loads(_rayjob_json(job_status="FAILED")) | {"metadata": {"name": "mlops-abc-a1"}},
-                json.loads(_rayjob_json(job_status="RUNNING")) | {"metadata": {"name": "mlops-abc-a1-resume-x8k2p"}},
+                json.loads(_rayjob_json(job_status="FAILED")) | {"metadata": {"name": "angku-abc-a1"}},
+                json.loads(_rayjob_json(job_status="RUNNING")) | {"metadata": {"name": "angku-abc-a1-resume-x8k2p"}},
                 json.loads(_rayjob_json(job_status=""))
-                | {"metadata": {"name": "mlops-abc-a1-resume-q4z7d"}},  # just created
+                | {"metadata": {"name": "angku-abc-a1-resume-q4z7d"}},  # just created
             ],
         }
     )
     kubectl = _FakeGet(listing)
     rid = compute_run_id(compute_experiment_id(spec), spec.resources, attempt=1)
     active = active_rayjobs(rid, namespace="ml", run=kubectl)
-    assert [a.name for a in active] == ["mlops-abc-a1-resume-x8k2p", "mlops-abc-a1-resume-q4z7d"]
+    assert [a.name for a in active] == ["angku-abc-a1-resume-x8k2p", "angku-abc-a1-resume-q4z7d"]
     ((cmd, _),) = kubectl.calls
-    assert cmd == ["kubectl", "get", "rayjob", "-n", "ml", "-l", f"mlops.io/run={rid[:32]}", "-o", "json"]
+    assert cmd == ["kubectl", "get", "rayjob", "-n", "ml", "-l", f"angku.io/run={rid[:32]}", "-o", "json"]
 
 
 def test_active_rayjobs_reports_kubectl_failure():
-    from mlops.adapters.kuberay import active_rayjobs
+    from angku.adapters.kuberay import active_rayjobs
 
     with pytest.raises(KubeRayError, match="forbidden"):
         active_rayjobs("r" * 64, run=_FakeGet(returncode=1, stderr="Error from server (Forbidden): forbidden"))
@@ -472,37 +472,37 @@ def test_active_rayjobs_reports_kubectl_failure():
 
 
 def test_list_rayjobs_finds_every_job_we_rendered():
-    from mlops.adapters.kuberay import list_rayjobs
+    from angku.adapters.kuberay import list_rayjobs
 
     listing = json.dumps(
         {
             "kind": "List",
             "items": [
                 json.loads(_rayjob_json(job_status="SUCCEEDED", deployment="Complete"))
-                | {"metadata": {"name": "mlops-a-a1"}},
-                json.loads(_rayjob_json(job_status="RUNNING")) | {"metadata": {"name": "mlops-b-a1"}},
+                | {"metadata": {"name": "angku-a-a1"}},
+                json.loads(_rayjob_json(job_status="RUNNING")) | {"metadata": {"name": "angku-b-a1"}},
             ],
         }
     )
     kubectl = _FakeGet(listing)
     jobs = list_rayjobs(namespace="ml", kubectl=["kubectl", "--context", "x"], run=kubectl)
     assert [(j.name, j.job_status, j.finished) for j in jobs] == [
-        ("mlops-a-a1", "SUCCEEDED", True),
-        ("mlops-b-a1", "RUNNING", False),
+        ("angku-a-a1", "SUCCEEDED", True),
+        ("angku-b-a1", "RUNNING", False),
     ]
     ((cmd, _),) = kubectl.calls
-    assert cmd == ["kubectl", "--context", "x", "get", "rayjob", "-n", "ml", "-l", "mlops.io/run", "-o", "json"]
+    assert cmd == ["kubectl", "--context", "x", "get", "rayjob", "-n", "ml", "-l", "angku.io/run", "-o", "json"]
     with pytest.raises(KubeRayError, match="forbidden"):
         list_rayjobs(run=_FakeGet(returncode=1, stderr="forbidden"))
 
 
 def test_rayjob_logs_are_captured_tail():
-    from mlops.adapters.kuberay import rayjob_logs
+    from angku.adapters.kuberay import rayjob_logs
 
     kubectl = _FakeGet("epoch 1\nepoch 2\n")
-    assert rayjob_logs("mlops-a-a1", namespace="ml", tail=50, run=kubectl) == "epoch 1\nepoch 2\n"
+    assert rayjob_logs("angku-a-a1", namespace="ml", tail=50, run=kubectl) == "epoch 1\nepoch 2\n"
     ((cmd, kw),) = kubectl.calls
-    assert cmd == ["kubectl", "logs", "-n", "ml", "job/mlops-a-a1", "--tail=50"]
+    assert cmd == ["kubectl", "logs", "-n", "ml", "job/angku-a-a1", "--tail=50"]
     assert kw["capture_output"] is True
     with pytest.raises(KubeRayError, match="NotFound"):
         rayjob_logs("x", run=_FakeGet(returncode=1, stderr="Error from server (NotFound)"))

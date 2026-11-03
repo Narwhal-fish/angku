@@ -10,10 +10,10 @@ Two parts:
   ``ok`` / ``mismatch`` / ``unknown``.
 
 Code check: HEAD == code.commit cannot work, because committing the yaml that pins a commit
-moves HEAD. So the probe compares the *code paths* (``mlops/``, ``experiments/`` minus
+moves HEAD. So the probe compares the *code paths* (``angku/``, ``experiments/`` minus
 ``experiments/configs/``, ``pyproject.toml``) in the working tree against the pinned commit,
-untracked files included. No git repo (a container) -> ``MLOPS_GIT_COMMIT`` baked into the
-image. Image digest -> ``MLOPS_IMAGE_DIGEST`` (KubeRay pods get it; a laptop has none).
+untracked files included. No git repo (a container) -> ``ANGKU_GIT_COMMIT`` baked into the
+image. Image digest -> ``ANGKU_IMAGE_DIGEST`` (KubeRay pods get it; a laptop has none).
 """
 
 from __future__ import annotations
@@ -25,9 +25,9 @@ from pathlib import Path
 import pytest
 import torch
 
-from mlops.adapters.local_environment import LocalEnvironmentProbe
-from mlops.config import load_experiment_yaml
-from mlops.domain.environment import CodeState, EnvCheck, RunEnvironment, verify_environment
+from angku.adapters.local_environment import LocalEnvironmentProbe
+from angku.config import load_experiment_yaml
+from angku.domain.environment import CodeState, EnvCheck, RunEnvironment, verify_environment
 
 CONFIGS = Path(__file__).parent.parent / "experiments/configs"
 DIGEST = "sha256:" + "ab" * 32
@@ -55,9 +55,9 @@ def _git(repo: Path, *args: str) -> str:
 @pytest.fixture
 def repo(tmp_path) -> Path:
     r = tmp_path / "repo"
-    (r / "mlops").mkdir(parents=True)
+    (r / "angku").mkdir(parents=True)
     (r / "experiments/configs").mkdir(parents=True)
-    (r / "mlops/core.py").write_text("x = 1\n")
+    (r / "angku/core.py").write_text("x = 1\n")
     (r / "experiments/model.py").write_text("y = 1\n")
     (r / "experiments/configs/e.yaml").write_text("a: 1\n")
     (r / "pyproject.toml").write_text("[project]\n")
@@ -100,9 +100,9 @@ def test_committing_only_the_yaml_after_pinning_is_still_ok(repo, base_spec):
 
 def test_modified_code_file_is_a_mismatch_naming_the_file(repo, base_spec):
     spec = _pin(base_spec, _git(repo, "rev-parse", "HEAD"))
-    (repo / "mlops/core.py").write_text("x = 2\n")
+    (repo / "angku/core.py").write_text("x = 2\n")
     check = _checks(repo, spec)["code.commit"]
-    assert check.status == "mismatch" and "mlops/core.py" in check.detail
+    assert check.status == "mismatch" and "angku/core.py" in check.detail
 
 
 def test_untracked_code_file_is_a_mismatch(repo, base_spec):
@@ -132,15 +132,15 @@ def test_commit_not_in_repo_is_unknown(repo, base_spec):
 
 def test_no_repo_falls_back_to_baked_commit_env(tmp_path, base_spec):
     spec = _pin(base_spec, "a" * 40)
-    assert _checks(tmp_path, spec, MLOPS_GIT_COMMIT="a" * 40)["code.commit"].status == "ok"
-    assert _checks(tmp_path, spec, MLOPS_GIT_COMMIT="b" * 40)["code.commit"].status == "mismatch"
+    assert _checks(tmp_path, spec, ANGKU_GIT_COMMIT="a" * 40)["code.commit"].status == "ok"
+    assert _checks(tmp_path, spec, ANGKU_GIT_COMMIT="b" * 40)["code.commit"].status == "mismatch"
     assert _checks(tmp_path, spec)["code.commit"].status == "unknown"
 
 
 def test_many_changed_files_are_summarised(repo, base_spec):
     spec = _pin(base_spec, _git(repo, "rev-parse", "HEAD"))
     for i in range(20):
-        (repo / f"mlops/m{i:02}.py").write_text("")
+        (repo / f"angku/m{i:02}.py").write_text("")
     detail = _checks(repo, spec)["code.commit"].detail
     assert "20 file" in detail and "m19.py" not in detail
 
@@ -150,8 +150,8 @@ def test_many_changed_files_are_summarised(repo, base_spec):
 
 def test_image_digest_from_env(repo, base_spec):
     spec = _pin(base_spec, _git(repo, "rev-parse", "HEAD"))
-    assert _checks(repo, spec, MLOPS_IMAGE_DIGEST=DIGEST)["environment.image_digest"].status == "ok"
-    bad = _checks(repo, spec, MLOPS_IMAGE_DIGEST=OTHER_DIGEST)["environment.image_digest"]
+    assert _checks(repo, spec, ANGKU_IMAGE_DIGEST=DIGEST)["environment.image_digest"].status == "ok"
+    bad = _checks(repo, spec, ANGKU_IMAGE_DIGEST=OTHER_DIGEST)["environment.image_digest"]
     assert bad.status == "mismatch" and OTHER_DIGEST in bad.detail
     assert _checks(repo, spec)["environment.image_digest"].status == "unknown"
 
@@ -180,7 +180,7 @@ def test_environment_round_trips_through_json(repo, base_spec):
 def test_probe_is_picklable_for_ray_workers(repo):
     import pickle
 
-    p = pickle.loads(pickle.dumps(_probe(repo, MLOPS_IMAGE_DIGEST=DIGEST)))
+    p = pickle.loads(pickle.dumps(_probe(repo, ANGKU_IMAGE_DIGEST=DIGEST)))
     assert p.repo == repo
 
 
@@ -225,7 +225,7 @@ class FixedProbe:
             packages={"torch": "2.x"},
             torch_threads=torch.get_num_threads(),
             code=CodeState(
-                source="git", head=spec.code.commit, pinned_found=True, changed=[] if self.commit_ok else ["mlops/x.py"]
+                source="git", head=spec.code.commit, pinned_found=True, changed=[] if self.commit_ok else ["angku/x.py"]
             ),
             image_digest=self.digest,
         )

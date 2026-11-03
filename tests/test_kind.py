@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from mlops.cli import build_parser
+from angku.cli import build_parser
 
 ROOT = Path(__file__).parent.parent
 SCRIPTS = {name: (ROOT / "scripts" / name).read_text() for name in ("kind-up.sh", "kind-down.sh", "kind-verify.sh")}
@@ -29,10 +29,10 @@ def test_registry_and_cluster_names_agree():
     up, down, verify = SCRIPTS["kind-up.sh"], SCRIPTS["kind-down.sh"], SCRIPTS["kind-verify.sh"]
     port = re.search(r"^REGISTRY_PORT=(\d+)", up, re.M).group(1)
     assert f"IMAGE=localhost:{port}/" in verify
-    assert f'"image": "localhost:{port}/mlops-train"' in verify
+    assert f'"image": "localhost:{port}/angku-train"' in verify
     for script in (up, down, verify):
-        assert 'CLUSTER="${MLOPS_KIND_CLUSTER:-mlops}"' in script
-    assert re.search(r"^REGISTRY=mlops-registry$", down, re.M) and re.search(r"^REGISTRY=mlops-registry$", up, re.M)
+        assert 'CLUSTER="${ANGKU_KIND_CLUSTER:-angku}"' in script
+    assert re.search(r"^REGISTRY=angku-registry$", down, re.M) and re.search(r"^REGISTRY=angku-registry$", up, re.M)
 
 
 def test_kuberay_is_pinned():
@@ -41,8 +41,8 @@ def test_kuberay_is_pinned():
 
 def test_pvcs_the_verify_script_mounts_are_created():
     up, verify = SCRIPTS["kind-up.sh"], SCRIPTS["kind-verify.sh"]
-    assert "for name in artifacts ray-storage" in up and "name: mlops-$name" in up
-    assert "--artifacts-pvc mlops-artifacts --ray-storage-pvc mlops-ray-storage" in verify
+    assert "for name in artifacts ray-storage" in up and "name: angku-$name" in up
+    assert "--artifacts-pvc angku-artifacts --ray-storage-pvc angku-ray-storage" in verify
 
 
 def test_image_is_built_through_the_clean_tree_check():
@@ -65,7 +65,7 @@ def test_image_is_built_through_the_clean_tree_check():
             "2",
             "--submit",
             "--kubectl",
-            "kubectl --context kind-mlops",
+            "kubectl --context kind-angku",
         ],
         [
             "rayjob",

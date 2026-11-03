@@ -12,15 +12,15 @@ from pathlib import Path
 
 import pytest
 
-from mlops.adapters.inmemory_artifacts import InMemoryArtifactStore
-from mlops.adapters.inmemory_tracker import InMemoryTracker
-from mlops.adapters.synthetic_data import SyntheticBlobs
-from mlops.application import run_experiment
-from mlops.application.bundle import MANIFEST
-from mlops.application.diff import ABSENT, Change, diff_runs
-from mlops.config import load_experiment_dict, load_experiment_yaml
-from mlops.ports.artifacts import ArtifactError
-from mlops.registry import discover
+from angku.adapters.inmemory_artifacts import InMemoryArtifactStore
+from angku.adapters.inmemory_tracker import InMemoryTracker
+from angku.adapters.synthetic_data import SyntheticBlobs
+from angku.application import run_experiment
+from angku.application.bundle import MANIFEST
+from angku.application.diff import ABSENT, Change, diff_runs
+from angku.config import load_experiment_dict, load_experiment_yaml
+from angku.ports.artifacts import ArtifactError
+from angku.registry import discover
 
 CONFIGS = Path(__file__).parent.parent / "experiments/configs"
 
@@ -150,7 +150,7 @@ def test_environment_differences_are_listed(spec, store):
     a = _run(store, spec, probe=FixedProbe(commit_ok=True))
     b = _run(store, spec, attempt=2, probe=FixedProbe(commit_ok=False))
     env = {c.path: c for c in diff_runs(store, a, store, b).environment}
-    assert env["code.changed"] == Change("code.changed", [], ["mlops/x.py"])
+    assert env["code.changed"] == Change("code.changed", [], ["angku/x.py"])
     assert "python" not in env  # equal values are not listed
 
 
@@ -204,7 +204,7 @@ def _three(spec):
 
 
 def _edit_history(store, run_id, epoch, key, value):
-    from mlops.domain.manifest import RunManifest
+    from angku.domain.manifest import RunManifest
 
     m = RunManifest.model_validate_json(store.get(run_id, MANIFEST))
     history = [dict(r) for r in m.history]
@@ -243,7 +243,7 @@ def test_different_lengths_compare_the_common_epochs(spec, store):
 
 def test_tolerance_and_nan(spec, store):
     a, b = _run(store, _three(spec)), _run(store, _three(spec), attempt=2)
-    from mlops.domain.manifest import RunManifest
+    from angku.domain.manifest import RunManifest
 
     v = RunManifest.model_validate_json(store.get(b, MANIFEST)).history[1]["val/loss"]
     _edit_history(store, b, 2, "val/loss", v + 1e-9)
@@ -269,7 +269,7 @@ def test_no_history_without_a_manifest(spec, store):
 
 
 def test_keep_best_records_are_compared(spec, store):
-    from mlops.domain.best import BestCriterion
+    from angku.domain.best import BestCriterion
 
     a = _run(store, _three(spec), keep_best=BestCriterion(metric="val/loss", mode="min"))
     b = _run(store, _three(spec), attempt=2, keep_best=BestCriterion(metric="val/loss", mode="max"))

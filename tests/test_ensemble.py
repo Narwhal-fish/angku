@@ -10,13 +10,13 @@ import pytest
 import torch
 import yaml
 
-from mlops.adapters.inmemory_artifacts import InMemoryArtifactStore
-from mlops.adapters.inmemory_tracker import InMemoryTracker
-from mlops.adapters.synthetic_data import SyntheticBlobs
-from mlops.application import run_experiment
-from mlops.application.predict import PredictError, combine, ensemble_runs, load_result, predict_run
-from mlops.config import load_experiment_dict
-from mlops.registry import discover
+from angku.adapters.inmemory_artifacts import InMemoryArtifactStore
+from angku.adapters.inmemory_tracker import InMemoryTracker
+from angku.adapters.synthetic_data import SyntheticBlobs
+from angku.application import run_experiment
+from angku.application.predict import PredictError, combine, ensemble_runs, load_result, predict_run
+from angku.config import load_experiment_dict
+from angku.registry import discover
 
 SMOKE_YAML = Path(__file__).parent.parent / "experiments/configs/tiny_cnn_smoke.yaml"
 WITH_TEST = {"kind": "holdout", "val": 0.2, "test": 0.3}
@@ -181,7 +181,7 @@ def test_report_shows_members_and_vote(three):
 
 # -- CLI ---------------------------------------------------------------------------
 
-from mlops.cli import main  # noqa: E402
+from angku.cli import main  # noqa: E402
 
 
 def test_cli_ensemble(tmp_path, capsys):

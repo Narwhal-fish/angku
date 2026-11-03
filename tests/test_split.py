@@ -8,9 +8,9 @@ from pathlib import Path
 import pytest
 import yaml
 
-from mlops.config import ConfigError, load_experiment_dict
-from mlops.domain import compute_experiment_id
-from mlops.domain.split import SplitError, assign_split, count_of
+from angku.config import ConfigError, load_experiment_dict
+from angku.domain import compute_experiment_id
+from angku.domain.split import SplitError, assign_split, count_of
 
 SMOKE_YAML = Path(__file__).parent.parent / "experiments/configs/tiny_cnn_smoke.yaml"
 IDS = [f"case-{i:03d}" for i in range(41)]
@@ -187,16 +187,16 @@ def test_impossible_splits_raise(ids, split, words):
 
 import torch  # noqa: E402
 
-from mlops.adapters.inmemory_artifacts import InMemoryArtifactStore  # noqa: E402
-from mlops.adapters.inmemory_tracker import InMemoryTracker  # noqa: E402
-from mlops.adapters.synthetic_data import SyntheticBlobs  # noqa: E402
-from mlops.application import run_experiment  # noqa: E402
-from mlops.application.bundle import SPLIT, load_bundle  # noqa: E402
-from mlops.application.reproduce import reproduce_run  # noqa: E402
-from mlops.domain.experiment import Dataset  # noqa: E402
-from mlops.domain.split import SplitAssignment  # noqa: E402
-from mlops.ports.data import DataError, DataSplits  # noqa: E402
-from mlops.registry import discover  # noqa: E402
+from angku.adapters.inmemory_artifacts import InMemoryArtifactStore  # noqa: E402
+from angku.adapters.inmemory_tracker import InMemoryTracker  # noqa: E402
+from angku.adapters.synthetic_data import SyntheticBlobs  # noqa: E402
+from angku.application import run_experiment  # noqa: E402
+from angku.application.bundle import SPLIT, load_bundle  # noqa: E402
+from angku.application.reproduce import reproduce_run  # noqa: E402
+from angku.domain.experiment import Dataset  # noqa: E402
+from angku.domain.split import SplitAssignment  # noqa: E402
+from angku.ports.data import DataError, DataSplits  # noqa: E402
+from angku.registry import discover  # noqa: E402
 
 DS = Dataset(name="synthetic-blobs", version="v1", snapshot="sha256:" + "0" * 64)
 
@@ -316,9 +316,9 @@ def test_split_problems_stop_the_run_before_it_starts(raw, data, words):
 
 # -- report, diff, CLI ----------------------------------------------------------------
 
-from mlops.application.diff import diff_lines, diff_runs  # noqa: E402
-from mlops.application.report import render_report, split_counts, split_rule  # noqa: E402
-from mlops.cli import main  # noqa: E402
+from angku.application.diff import diff_lines, diff_runs  # noqa: E402
+from angku.application.report import render_report, split_counts, split_rule  # noqa: E402
+from angku.cli import main  # noqa: E402
 
 
 def test_split_rule_and_counts_read_plainly():
@@ -374,8 +374,8 @@ def test_cli_run_prints_the_split(raw, tmp_path, capsys):
 
 
 def test_ui_overview_shows_the_split_like_the_report(raw):
-    from mlops.application.listing import list_runs
-    from mlops.ui.rows import overview_rows
+    from angku.application.listing import list_runs
+    from angku.ui.rows import overview_rows
 
     store = InMemoryArtifactStore()
     r = run_experiment(

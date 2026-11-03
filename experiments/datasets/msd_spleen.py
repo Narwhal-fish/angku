@@ -4,7 +4,7 @@ Requires the ``medical`` extra (MONAI + nibabel). The name is always registered 
 missing install gives a clear hint instead of "unknown dataset".
 
 Provider config (operational, never in any id): ``root`` = the directory that holds
-``Task09_Spleen/`` (``--data-root`` / ``MLOPS_DATA_ROOT`` on the CLI).
+``Task09_Spleen/`` (``--data-root`` / ``ANGKU_DATA_ROOT`` on the CLI).
 
 The yaml's ``preprocessing`` section (in the fingerprint) is validated by
 ``SpleenPreprocessing``. Deterministic steps follow the MONAI spleen tutorial and run
@@ -43,10 +43,10 @@ from pydantic import Field, ValidationError
 from torch import Tensor
 from torch.utils.data import Dataset as TorchDataset
 
-from mlops.domain.experiment import Dataset
-from mlops.domain.split import SplitAssignment
-from mlops.ports.data import DataError, DataSplits, Sample
-from mlops.registry import DATASETS, Params
+from angku.domain.experiment import Dataset
+from angku.domain.split import SplitAssignment
+from angku.ports.data import DataError, DataSplits, Sample
+from angku.registry import DATASETS, Params
 
 NAME = "msd-task09-spleen"
 TASK_DIR = "Task09_Spleen"
