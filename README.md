@@ -1,10 +1,10 @@
-# mlManager
+# angku
 
-[![ci](https://github.com/Narwhal-fish/mlManager/actions/workflows/ci.yml/badge.svg)](https://github.com/Narwhal-fish/mlManager/actions/workflows/ci.yml)
+[![ci](https://github.com/Narwhal-fish/angku/actions/workflows/ci.yml/badge.svg)](https://github.com/Narwhal-fish/angku/actions/workflows/ci.yml)
 
 Train models so that anyone can get the same result again.
 
-mlManager runs your training experiments, locally or on a Kubernetes cluster with Ray, and
+angku runs your training experiments, locally or on a Kubernetes cluster with Ray, and
 leaves a **bundle** for every run: the exact settings, the metrics of every epoch, the
 environment it ran in, and the trained weights. Hand the bundle to someone else and they can
 re-run it and check that they get the same run, the same metrics and bit-identical weights.
@@ -26,9 +26,9 @@ Verified on a local KubeRay cluster on kind (CPU, 2 workers: interrupt, resume a
 bit-identical) and on a single NVIDIA RTX 5070 Ti (SwinUNETR on the MSD Spleen dataset: run,
 reproduce and resume bit-identical, also inside the training image). Not yet verified: several
 GPUs on one machine, GPU pods on KubeRay, and training across several nodes (see issues
-[#8](https://github.com/Narwhal-fish/mlManager/issues/8),
-[#9](https://github.com/Narwhal-fish/mlManager/issues/9) and
-[#10](https://github.com/Narwhal-fish/mlManager/issues/10)).
+[#8](https://github.com/Narwhal-fish/angku/issues/8),
+[#9](https://github.com/Narwhal-fish/angku/issues/9) and
+[#10](https://github.com/Narwhal-fish/angku/issues/10)).
 
 ## What it does for you
 
@@ -80,7 +80,7 @@ tiny-cnn-smoke: FINISHED
 ```
 
 You will also see a few `warning: not verified: ...` lines. The example points at a made-up
-commit and image and uses generated data, so mlManager tells you what it could not confirm
+commit and image and uses generated data, so angku tells you what it could not confirm
 instead of pretending. With your own experiment pinned to a real commit and real data, those
 checks pass; the image check passes when the run happens inside the pinned image, as it does on
 Kubernetes.

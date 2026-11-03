@@ -8,7 +8,7 @@ meta:
   tags: [baseline, swinunetr, phase0]
 
 code:
-  repo: https://github.com/example/mlManager
+  repo: https://github.com/example/angku
   commit: 0123456789abcdef0123456789abcdef01234567
 
 environment:
