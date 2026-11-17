@@ -16,7 +16,7 @@ env:
   MLFLOW_DISABLE_AGENT_HINT: "1"
 
 jobs:
-  # Same ruff as the dev extra's pin (tests/test_ci.py checks they agree).
+  # Same ruff and import-linter as the dev extra's pins (tests/test_ci.py checks they agree).
   lint:
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -25,6 +25,9 @@ jobs:
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
       - run: uvx ruff@0.17.0 check --output-format github .
       - run: uvx ruff@0.17.0 format --check .
+      - run: uvx --from import-linter==2.16 lint-imports
+        env:
+          PYTHONPATH: .
 
   # Everything installed (dev = mlflow + ray[train] + textual, plus medical = MONAI): every test
   # must run, so a skip here means an extra failed to import and fails the job.
