@@ -33,7 +33,6 @@ from torch.utils.data import DataLoader, DistributedSampler, Sampler
 
 from angku.application.bundle import (
     CHECKPOINT,
-    MANIFEST,
     Checkpoint,
     TrainState,
     load_checkpoint,
@@ -41,11 +40,13 @@ from angku.application.bundle import (
     save_checkpoint,
     save_spec,
 )
+from angku.application.errors import RunnerError
+from angku.application.lifecycle import Event, require
 from angku.domain.best import BestCriterion, best_epoch, best_record
 from angku.domain.environment import EnvCheck, EnvironmentRecord, check_snapshot, record_environment
 from angku.domain.experiment import ExperimentSpec, Resources, Training
 from angku.domain.identity import compute_experiment_id, compute_run_id
-from angku.domain.manifest import FORMAT_VERSION, ResumePoint, RunManifest, parse_manifest
+from angku.domain.manifest import FORMAT_VERSION, ResumePoint, RunManifest
 from angku.domain.split import SplitAssignment, SplitError, assign_split
 from angku.ports.artifacts import ArtifactError, ArtifactStore
 from angku.ports.data import DataError, DataProvider, DataSplits, Sample
@@ -65,10 +66,6 @@ _OPTIMIZERS: dict[str, type[torch.optim.Optimizer]] = {
     "adamw": torch.optim.AdamW,
     "sgd": torch.optim.SGD,
 }
-
-
-class RunnerError(Exception):
-    pass
 
 
 @dataclass(frozen=True)
@@ -502,6 +499,8 @@ def run_experiment(
         raise RunnerError("checkpoint_every needs an artifact store to write checkpoint.pt into")
     if resume and artifacts is None:
         raise RunnerError("resume needs an artifact store holding the run's checkpoint.pt")
+    if artifacts is not None:
+        require(artifacts, run_id, Event.RESUME if resume else Event.RUN)
     ckpt = _resume_point(artifacts, run_id, experiment_id) if resume else None
     dev = resolve_device(spec.resources, device)
     assignment = resolve_split(spec, data)  # what the worker will split too: same function, same cases
@@ -589,16 +588,21 @@ def run_experiment(
             if artifacts is not None:
                 save_bundle(artifacts, spec=spec, manifest=_manifest("FAILED"), model_state=None, split=assignment)
         raise
+    if artifacts is not None:
+        try:
+            save_bundle(
+                artifacts,
+                spec=spec,
+                manifest=_manifest("FINISHED"),
+                model_state=model.state_dict(),
+                best_state=best_state,
+                split=assignment,
+            )
+        except BaseException:
+            tracker.end_run("FAILED")
+            raise
     tracker.end_run("FINISHED")
     if artifacts is not None:
-        save_bundle(
-            artifacts,
-            spec=spec,
-            manifest=_manifest("FINISHED"),
-            model_state=model.state_dict(),
-            best_state=best_state,
-            split=assignment,
-        )
         if not keep_checkpoint:  # after the FINISHED manifest landed: a crash in between only leaves it
             artifacts.delete(run_id, CHECKPOINT)
 
@@ -624,13 +628,6 @@ def resumed_criterion(requested: BestCriterion | None, stored: BestCriterion | N
 
 
 def _resume_point(store: ArtifactStore, run_id: str, experiment_id: str) -> Checkpoint:
-    # FINISHED first: a finished run has usually dropped its checkpoint, and that is the reason.
-    try:
-        status = parse_manifest(store.get(run_id, MANIFEST)).status
-    except ArtifactError:  # killed before any manifest was written
-        status = None
-    if status == "FINISHED":
-        raise RunnerError(f"run {run_id} already FINISHED; nothing to resume")
     try:
         ckpt = load_checkpoint(store, run_id)
     except ArtifactError:

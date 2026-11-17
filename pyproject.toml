@@ -17,6 +17,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
+    "hypothesis>=6.100",  # property tests of the run lifecycle
     "mlflow>=3.0",  # so the MLflow tracker tests run on the dev box
     "ray[train]>=2.40",  # so the Ray launcher tests run on the dev box
     "textual>=8.0",  # so the `angku ui` tests run on the dev box

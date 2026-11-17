@@ -6,8 +6,9 @@ ids exist for: did every FINISHED attempt of this ExperimentID end with the same
 metrics? Exactly by default; ``atol`` > 0 accepts runs whose final metrics are within ``atol``
 of each other (max - min), for runs from different launchers. NaN agrees only with NaN.
 
-Statuses: FINISHED / FAILED (from the manifest), RUNNING (no manifest, a live ``progress.json``:
-see ``application.progress``; never resumable), INTERRUPTED (no manifest but a
+Statuses come from ``domain.run_state.derive_state``: FINISHED / FAILED (from the manifest), RUNNING
+(no manifest, a live ``progress.json``: see ``application.progress``; never resumable), RESUMING (a FAILED
+manifest and a live ``progress.json``: ``angku resume`` is running; never resumable), INTERRUPTED (no manifest but a
 checkpoint.pt or a Ray launch.json: killed, resumable), INCOMPLETE (no manifest, no checkpoint), UNREADABLE
 (spec or manifest does not parse; ``error`` says why). Directories without ``spec.json``
 are not runs and are skipped.
@@ -23,11 +24,12 @@ from typing import Any
 from pydantic import ValidationError
 
 from angku.application.bundle import CHECKPOINT, LAUNCH, MANIFEST, SPEC
-from angku.application.progress import PROGRESS, is_live, read_progress
+from angku.application.progress import PROGRESS, read_progress
 from angku.domain.best import BestRecord
 from angku.domain.experiment import ExperimentSpec
 from angku.domain.identity import compute_experiment_id
 from angku.domain.manifest import parse_manifest
+from angku.domain.run_state import LIVE, derive_state, is_resumable
 from angku.ports.artifacts import ArtifactError, ArtifactStore
 
 
@@ -149,34 +151,38 @@ def _summarise(store: ArtifactStore, run_id: str, files: list[str], now: float) 
         spec = ExperimentSpec.model_validate_json(store.get(run_id, SPEC))
         manifest = parse_manifest(store.get(run_id, MANIFEST)) if MANIFEST in files else None
     except (ValidationError, ValueError) as e:
-        return RunSummary(run_id=run_id, experiment_id="?", name="?", status="UNREADABLE", error=str(e).splitlines()[0])
+        state = derive_state(
+            has_spec=True, has_checkpoint=False, manifest=None, progress=None, now=now, unreadable=True
+        )
+        return RunSummary(run_id=run_id, experiment_id="?", name="?", status=state.value, error=str(e).splitlines()[0])
     # local runs keep checkpoint.pt here; Ray runs keep theirs in Ray storage and leave launch.json
     has_ckpt = CHECKPOINT in files or LAUNCH in files
+    progress = read_progress(store, run_id) if PROGRESS in files else None
+    state = derive_state(has_spec=True, has_checkpoint=has_ckpt, manifest=manifest, progress=progress, now=now)
     base = dict(
         run_id=run_id,
         experiment_id=compute_experiment_id(spec),
         name=spec.meta.name,
+        status=state.value,
         epochs_total=spec.training.epochs,
         workers=spec.resources.workers,
+        resumable=is_resumable(state, has_checkpoint=has_ckpt),
+        attempt=manifest.attempt if manifest is not None else None,
+        resumes=len(manifest.resumes) if manifest is not None else 0,
     )
+    if state in LIVE:
+        assert progress is not None
+        return RunSummary(
+            **base,
+            epochs_done=progress.epoch,
+            final_metrics=dict(progress.history[-1]) if progress.history else {},
+            updated=progress.updated,
+        )
     if manifest is None:
-        progress = read_progress(store, run_id) if PROGRESS in files else None
-        if progress is not None and is_live(progress, now=now):
-            return RunSummary(
-                **base,
-                status="RUNNING",
-                epochs_done=progress.epoch,
-                final_metrics=dict(progress.history[-1]) if progress.history else {},
-                updated=progress.updated,
-            )
-        return RunSummary(**base, status="INTERRUPTED" if has_ckpt else "INCOMPLETE", resumable=has_ckpt)
+        return RunSummary(**base)
     return RunSummary(
         **base,
-        status=manifest.status,
-        attempt=manifest.attempt,
         epochs_done=len(manifest.history),
         final_metrics=dict(manifest.history[-1]) if manifest.history else {},
-        resumes=len(manifest.resumes),
-        resumable=has_ckpt and manifest.status != "FINISHED",
         best=manifest.best,
     )
