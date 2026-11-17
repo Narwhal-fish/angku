@@ -275,7 +275,7 @@ class RunScreen(Screen[None]):
         except ArtifactError:
             files = []
         manifest_bytes = store.get(self.run_id, MANIFEST) if MANIFEST in files else None
-        progress = read_progress(store, self.run_id) if PROGRESS in files and manifest_bytes is None else None
+        progress = read_progress(store, self.run_id) if PROGRESS in files else None
         if (files, manifest_bytes, progress) == self._loaded:
             return
         self._loaded = (files, manifest_bytes, progress)

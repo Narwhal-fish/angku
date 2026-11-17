@@ -572,11 +572,19 @@ class _FakeRayLauncher:
         _FakeRayLauncher.made.append(kw)
 
     def launch(self, spec, **kw):
+        from angku.adapters.inmemory_artifacts import InMemoryArtifactStore
         from angku.application import run_experiment
 
         _FakeRayLauncher.launched.append(dict(kw))
-        kw.pop("checkpoint_every", None), kw.pop("resume", None)
-        return run_experiment(spec, **kw)
+        kw.pop("checkpoint_every", None)
+        target = kw.get("artifacts")
+        if not kw.pop("resume", False) or target is None:
+            return run_experiment(spec, **kw)
+        scratch = kw["artifacts"] = InMemoryArtifactStore()
+        result = run_experiment(spec, **kw)
+        for name in scratch.list(result.run_id):
+            target.put(result.run_id, name, scratch.get(result.run_id, name))
+        return result
 
 
 @pytest.fixture
@@ -656,6 +664,73 @@ def test_resume_finished_run_exits_2(finished_run, capsys):
     art, run_id = finished_run
     assert main(["resume", run_id, "--artifacts", str(art), "--tracker", "inmemory"]) == 2
     assert "already FINISHED" in capsys.readouterr().err
+
+
+def _bundle_bytes(run_dir: Path) -> dict[str, bytes]:
+    return {p.name: p.read_bytes() for p in sorted(run_dir.iterdir())}
+
+
+def test_run_refuses_a_finished_run_and_leaves_it_alone(finished_run, capsys):
+    art, run_id = finished_run
+    before = _bundle_bytes(art / run_id)
+    assert main(["run", str(SMOKE), "--tracker", "inmemory", "--artifacts", str(art)]) == 2
+    err = capsys.readouterr().err
+    assert run_id in err and "--attempt" in err and "Traceback" not in err
+    assert _bundle_bytes(art / run_id) == before
+
+
+def test_run_refuses_a_failed_run_and_points_at_resume(tmp_path, capsys, monkeypatch):
+    art, run_id = _killed_run(tmp_path, capsys, monkeypatch)
+    before = _bundle_bytes(art / run_id)
+    yml = tmp_path / "e.yaml"
+    assert main(["run", str(yml), "--tracker", "inmemory", "--artifacts", str(art)]) == 2
+    err = capsys.readouterr().err
+    assert "--attempt" in err and f"angku resume {run_id}" in err
+    assert _bundle_bytes(art / run_id) == before
+
+
+def test_run_refuses_a_run_dir_holding_only_its_spec(tmp_path, capsys):
+    spec = load_experiment_yaml(SMOKE)
+    run_id = compute_run_id(compute_experiment_id(spec), spec.resources, 1)
+    art = tmp_path / "artifacts"
+    (art / run_id).mkdir(parents=True)
+    (art / run_id / SPEC).write_text(spec.model_dump_json())
+    assert main(["run", str(SMOKE), "--tracker", "inmemory", "--artifacts", str(art)]) == 2
+    assert "--attempt" in capsys.readouterr().err
+    assert [p.name for p in (art / run_id).iterdir()] == [SPEC]
+
+
+def test_run_with_a_new_attempt_is_allowed(finished_run, capsys):
+    art, _ = finished_run
+    rc = main(["run", str(SMOKE), "--tracker", "inmemory", "--artifacts", str(art), "--attempt", "2", "--json"])
+    assert rc == 0
+    assert json.loads(capsys.readouterr().out)["attempt"] == 2
+
+
+def _baseline_run_dir(art: Path) -> Path:
+    spec = load_experiment_yaml(BASELINE)
+    return art / compute_run_id(compute_experiment_id(spec), spec.resources, 1)
+
+
+@pytest.mark.parametrize("existing", [SPEC, MANIFEST])
+def test_rayjob_submit_refuses_a_run_already_in_artifacts(tmp_path, capsys, monkeypatch, existing):
+    calls = _fake_kubectl(monkeypatch)
+    art = tmp_path / "artifacts"
+    run_dir = _baseline_run_dir(art)
+    run_dir.mkdir(parents=True)
+    (run_dir / existing).write_text("{}")
+    rc = main(["rayjob", str(BASELINE), "--data-pvc", "msd", "--artifacts", str(art), "--submit"])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert run_dir.name in err and "--attempt" in err
+    assert calls == []
+
+
+def test_rayjob_submit_with_a_fresh_artifacts_dir_submits(tmp_path, capsys, monkeypatch):
+    calls = _fake_kubectl(monkeypatch)
+    rc = main(["rayjob", str(BASELINE), "--data-pvc", "msd", "--artifacts", str(tmp_path / "a"), "--submit"])
+    assert rc == 0
+    assert len(calls) == 1
 
 
 # --- diff ---

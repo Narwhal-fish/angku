@@ -19,7 +19,7 @@ from angku.adapters.inmemory_tracker import InMemoryTracker  # noqa: E402
 from angku.adapters.ray_launcher import RayLauncher  # noqa: E402
 from angku.adapters.synthetic_data import SyntheticBlobs  # noqa: E402
 from angku.application import RunnerError, run_experiment  # noqa: E402
-from angku.application.bundle import load_bundle  # noqa: E402
+from angku.application.bundle import MANIFEST, LaunchRecord, load_bundle, save_launch, save_spec  # noqa: E402
 from angku.config import load_experiment_dict, load_experiment_yaml  # noqa: E402
 from angku.domain import FORMAT_VERSION, compute_experiment_id, compute_run_id  # noqa: E402
 from angku.domain.best import BestCriterion, best_record  # noqa: E402
@@ -447,6 +447,7 @@ def test_ray_resume_with_another_keep_best_is_refused(tmp_path):
 
     store, spec = InMemoryArtifactStore(), _spec(workers=1)
     run_id = compute_run_id(compute_experiment_id(spec), spec.resources, 1)
+    save_spec(store, run_id, spec)
     save_launch(
         store,
         run_id,
@@ -466,10 +467,13 @@ def test_ray_resume_with_another_keep_best_is_refused(tmp_path):
 
 
 def test_ray_resume_without_a_checkpoint_is_refused_before_starting(tmp_path):
-    tracker = InMemoryTracker()
+    spec, store, tracker = _spec(workers=1), InMemoryArtifactStore(), InMemoryTracker()
+    run_id = compute_run_id(compute_experiment_id(spec), spec.resources, 1)
+    save_spec(store, run_id, spec)
+    save_launch(store, run_id, LaunchRecord(launcher="ray", attempt=1, checkpoint_every=1, storage_path=None))
     with pytest.raises(RunnerError, match="no Ray checkpoint"):
         RayLauncher(storage_path=tmp_path / "ray").launch(
-            _spec(workers=1), data=_data(), tracker=tracker, artifacts=InMemoryArtifactStore(), resume=True
+            spec, data=_data(), tracker=tracker, artifacts=store, resume=True
         )
     assert tracker.runs == []
 
@@ -535,3 +539,45 @@ def test_two_worker_ray_run_is_reproduced_bit_exactly_through_the_cli(tmp_path, 
     # The same bundle cannot be replayed with one process.
     assert main(["reproduce", run_id, "--artifacts", art, "--tracker", "inmemory", "--launcher", "local"]) == 2
     assert "2 workers" in capsys.readouterr().err
+
+
+class _ManifestSeenTracker(InMemoryTracker):
+    def __init__(self, store) -> None:
+        super().__init__()
+        self.store = store
+        self.manifest_at_end: list[bool] = []
+
+    def end_run(self, status):
+        self.manifest_at_end.append(bool(self.store.runs()) and MANIFEST in self.store.list(self.current.run_id))
+        super().end_run(status)
+
+
+class _DiskFullStore(InMemoryArtifactStore):
+    def put(self, run_id, name, data):
+        if name == MANIFEST:
+            raise OSError("No space left on device")
+        super().put(run_id, name, data)
+
+
+def test_ray_tracker_hears_finished_only_after_the_bundle_landed(launcher):
+    store = InMemoryArtifactStore()
+    tracker = _ManifestSeenTracker(store)
+    launcher.launch(_spec(workers=1), data=_data(), tracker=tracker, artifacts=store)
+    assert tracker.runs[0].status == "FINISHED"
+    assert tracker.manifest_at_end == [True]
+
+
+def test_ray_bundle_write_failure_ends_the_tracker_run_failed(launcher):
+    tracker = InMemoryTracker()
+    with pytest.raises(OSError, match="No space"):
+        launcher.launch(_spec(workers=1), data=_data(), tracker=tracker, artifacts=_DiskFullStore())
+    assert [r.status for r in tracker.runs] == ["FAILED"]
+
+
+def test_ray_refuses_a_second_run_of_a_finished_run(launcher):
+    store = InMemoryArtifactStore()
+    launcher.launch(_spec(workers=1), data=_data(), tracker=InMemoryTracker(), artifacts=store)
+    tracker = InMemoryTracker()
+    with pytest.raises(RunnerError, match="already exists"):
+        launcher.launch(_spec(workers=1), data=_data(), tracker=tracker, artifacts=store)
+    assert tracker.runs == []

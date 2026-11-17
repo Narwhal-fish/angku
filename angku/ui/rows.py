@@ -25,6 +25,7 @@ from angku.application.report import (
 from angku.application.runner import RunResult
 from angku.domain.experiment import ExperimentSpec
 from angku.domain.manifest import RunManifest
+from angku.domain.run_state import LIVE
 
 EXPERIMENT_COLUMNS = ("NAME", "EXPERIMENT", "RUNS", "FINISHED", "AGREE")
 
@@ -73,7 +74,7 @@ def run_row(r: RunSummary, metric: str | None) -> tuple[str, ...]:
 def overview_rows(
     s: RunSummary, *, spec: ExperimentSpec | None, manifest: RunManifest | None, now: float | None = None
 ) -> list[tuple[str, str]]:
-    """``now`` (unix seconds) ages a RUNNING run's heartbeat."""
+    """``now`` (unix seconds) ages a RUNNING or RESUMING run's heartbeat."""
     rows = [("name", s.name)]
     if spec is not None and spec.meta.description:
         rows.append(("description", spec.meta.description))
@@ -86,7 +87,7 @@ def overview_rows(
         ("workers", str(s.workers) if s.workers is not None else "?"),
         ("device", manifest.device if manifest is not None else "—"),
     ]
-    if s.status == "RUNNING" and s.updated is not None and now is not None:
+    if s.status in LIVE and s.updated is not None and now is not None:
         rows.append(
             (
                 "progress",
@@ -113,7 +114,7 @@ def overview_rows(
     if manifest is not None:
         rows += [("environment", record_verdict(manifest.environment)), ("data", data_verdict(manifest))]
     else:
-        missing = "recorded when the run ends" if s.status == "RUNNING" else "no manifest"
+        missing = "recorded when the run ends" if s.status in LIVE else "no manifest"
         rows += [("environment", missing), ("data", missing)]
     if s.error:
         rows.append(("error", s.error))

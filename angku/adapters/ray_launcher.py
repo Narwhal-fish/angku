@@ -42,7 +42,6 @@ from ray.train.torch import TorchTrainer
 from ray.util.queue import Queue
 
 from angku.application.bundle import (
-    MANIFEST,
     LaunchRecord,
     TrainState,
     load_launch,
@@ -51,6 +50,7 @@ from angku.application.bundle import (
     save_launch,
     save_spec,
 )
+from angku.application.lifecycle import Event, require
 from angku.application.runner import (
     RunnerError,
     RunResult,
@@ -64,7 +64,7 @@ from angku.domain.best import BestCriterion, best_record
 from angku.domain.environment import EnvCheck, EnvironmentRecord, record_environment
 from angku.domain.experiment import ExperimentSpec
 from angku.domain.identity import compute_experiment_id, compute_run_id
-from angku.domain.manifest import FORMAT_VERSION, ResumePoint, RunManifest, parse_manifest
+from angku.domain.manifest import FORMAT_VERSION, ResumePoint, RunManifest
 from angku.ports.artifacts import ArtifactError, ArtifactStore
 from angku.ports.data import DataProvider
 from angku.ports.environment import EnvironmentProbe
@@ -285,9 +285,10 @@ class RayLauncher:
             raise RunnerError("checkpoint_every / resume need an artifact store (spec.json + launch.json go there)")
         storage = str(self.storage_path or Path(tempfile.gettempdir()) / "angku-ray")
         name = ray_run_name(run_id, attempt)
+        if artifacts is not None:
+            require(artifacts, run_id, Event.RESUME if resume else Event.RUN)
         if resume:
             assert artifacts is not None
-            _refuse_if_finished(artifacts, run_id)
             try:
                 record = load_launch(artifacts, run_id)
             except ArtifactError:
@@ -417,16 +418,20 @@ class RayLauncher:
             raise
         finally:
             metrics_queue.shutdown()
-        tracker.end_run("FINISHED")
         if artifacts is not None:
-            save_bundle(
-                artifacts,
-                spec=spec,
-                manifest=_manifest("FINISHED"),
-                model_state=state,
-                best_state=best_state,
-                split=assignment,
-            )
+            try:
+                save_bundle(
+                    artifacts,
+                    spec=spec,
+                    manifest=_manifest("FINISHED"),
+                    model_state=state,
+                    best_state=best_state,
+                    split=assignment,
+                )
+            except BaseException:
+                tracker.end_run("FAILED")
+                raise
+        tracker.end_run("FINISHED")
         if not keep_checkpoint:
             # Ray's copies (latest checkpoint + final weights) are dead weight once model.pt is
             # written: nothing left to resume. Through Ray's filesystem, so s3:// storage works too.
@@ -441,12 +446,3 @@ class RayLauncher:
             resumes=resumes,
             split=assignment,
         )
-
-
-def _refuse_if_finished(store: ArtifactStore, run_id: str) -> None:
-    try:
-        status = parse_manifest(store.get(run_id, MANIFEST)).status
-    except ArtifactError:
-        return
-    if status == "FINISHED":
-        raise RunnerError(f"run {run_id} already FINISHED; nothing to resume")

@@ -49,7 +49,6 @@ import shlex
 import subprocess
 import sys
 import tempfile
-import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -77,6 +76,7 @@ from angku.application.bundle import LAUNCH, MANIFEST, SPEC, load_bundle, load_c
 from angku.application.diff import RunDiff, diff_lines, diff_runs, format_value
 from angku.application.gc import GcError, GcItem, GcPolicy, apply_gc, gc_lines, plan_gc
 from angku.application.launch import Launcher, LocalLauncher
+from angku.application.lifecycle import Event, TransitionError, require
 from angku.application.listing import ExperimentGroup, group_by_experiment, list_runs
 from angku.application.predict import (
     PredictError,
@@ -86,7 +86,7 @@ from angku.application.predict import (
     prediction_lines,
     result_line,
 )
-from angku.application.progress import PROGRESS, is_live, read_progress
+from angku.application.progress import PROGRESS
 from angku.application.report import render_report, split_counts, split_rule, write_report
 from angku.application.reproduce import (
     ReproduceError,
@@ -216,6 +216,9 @@ def cmd_run(args: argparse.Namespace) -> int:
         raise CliError("cannot run: unpinned inputs: " + ", ".join(spec.unpinned_inputs()))
     _check_checkpoint_args(args)
     keep_best = _keep_best(args.keep_best)
+    store = LocalArtifactStore(args.artifacts) if args.artifacts else None
+    if store is not None:
+        _require(store, compute_run_id(compute_experiment_id(spec), spec.resources, args.attempt), Event.RUN)
     _discover(args.experiments)
     data = _data_provider(spec, args.data_root)
     tracker = _tracker(spec, args.tracker, args.mlflow_uri)
@@ -231,7 +234,6 @@ def cmd_run(args: argparse.Namespace) -> int:
         problems = _unverified(checks)
         if problems:
             raise CliError("--strict-env: run does not verifiably match the pins:\n  " + "\n  ".join(problems))
-    store = LocalArtifactStore(args.artifacts) if args.artifacts else None
     return _launch_and_report(
         spec,
         args,
@@ -245,6 +247,13 @@ def cmd_run(args: argparse.Namespace) -> int:
         keep_checkpoint=args.keep_checkpoint,
         keep_best=keep_best,
     )
+
+
+def _require(store: LocalArtifactStore, run_id: str, event: Event) -> None:
+    try:
+        require(store, run_id, event)
+    except TransitionError as e:
+        raise CliError(str(e)) from None
 
 
 def _keep_best(text: str | None) -> BestCriterion | None:
@@ -337,25 +346,10 @@ def _print_summary(spec: ExperimentSpec, s: dict[str, Any]) -> None:
 def _resume_target(
     store: LocalArtifactStore, run_id: str, *, ray_address: str | None, experiments: str
 ) -> tuple[ExperimentSpec, Launcher, int, str]:
-    """(spec, launcher, attempt, launcher name) to continue ``run_id``; refuses a FINISHED run or
-    one with nothing to resume from. Shared by `angku resume` and `angku ui`."""
-    try:
-        spec = ExperimentSpec.model_validate_json(store.get(run_id, SPEC))
-    except ArtifactError as e:
-        raise CliError(str(e)) from e
-    try:
-        finished = parse_manifest(store.get(run_id, MANIFEST)).status == "FINISHED"
-    except ArtifactError:
-        finished = False
-    if finished:  # checked first: a finished run has usually dropped its checkpoint
-        raise CliError(f"run {run_id} already FINISHED; nothing to resume")
-    progress = read_progress(store, run_id)
-    now = time.time()
-    if progress is not None and is_live(progress, now=now):
-        raise CliError(
-            f"run {run_id} is RUNNING (heartbeat {now - progress.updated:.0f}s ago): "
-            "resuming it now would race the live process"
-        )
+    """(spec, launcher, attempt, launcher name) to continue ``run_id``; refuses what
+    ``lifecycle.ALLOWED_TRANSITIONS`` does not allow. Shared by `angku resume` and `angku ui`."""
+    _require(store, run_id, Event.RESUME)
+    spec = ExperimentSpec.model_validate_json(store.get(run_id, SPEC))
     if LAUNCH in store.list(run_id):
         # A Ray run: its checkpoints live in Ray storage; resume through Ray with the same storage.
         launch = load_launch(store, run_id)
@@ -439,6 +433,9 @@ def cmd_rayjob(args: argparse.Namespace) -> int:
     if not args.submit:
         print(json.dumps({"apiVersion": "v1", "kind": "List", "items": items}, indent=2))
         return 0
+    if args.artifacts:
+        run_id = items[-1]["metadata"]["annotations"]["angku.io/run-id"]
+        _require(LocalArtifactStore(args.artifacts), run_id, Event.RESUME if args.resume else Event.RUN)
     kubectl = shlex.split(args.kubectl)
     try:
         if args.resume:
@@ -976,6 +973,12 @@ def build_parser() -> argparse.ArgumentParser:
         "from the checkpoints on the PVCs; pass the same PVCs and paths as the first job",
     )
     rj.add_argument("--submit", action="store_true", help="kubectl apply the manifest instead of printing it")
+    rj.add_argument(
+        "--artifacts",
+        metavar="DIR",
+        help="this machine's view of --artifacts-pvc: with --submit, refuse a run that is already there "
+        "(or, with --resume, one that cannot be resumed)",
+    )
     rj.add_argument("--kubectl", default="kubectl", help='kubectl command, e.g. "kubectl --context prod"')
     rj.set_defaults(func=cmd_rayjob)
 

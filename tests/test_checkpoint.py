@@ -16,7 +16,7 @@ from angku.adapters.inmemory_artifacts import InMemoryArtifactStore
 from angku.adapters.inmemory_tracker import InMemoryTracker
 from angku.adapters.synthetic_data import SyntheticBlobs
 from angku.application import RunnerError, run_experiment
-from angku.application.bundle import CHECKPOINT, MANIFEST, load_bundle, load_checkpoint
+from angku.application.bundle import CHECKPOINT, MANIFEST, load_bundle, load_checkpoint, save_spec
 from angku.application.reproduce import reproduce_run
 from angku.config import load_experiment_dict, load_experiment_yaml
 from angku.registry import discover
@@ -249,6 +249,7 @@ def test_checkpoint_of_another_run_is_refused(spec):
     from angku.domain import compute_experiment_id, compute_run_id
 
     other_id = compute_run_id(compute_experiment_id(other), other.resources, 1)
+    save_spec(store, other_id, other)
     store.put(other_id, CHECKPOINT, store.get(run_id, CHECKPOINT))
     with pytest.raises(RunnerError, match="belongs to run"):
         run_experiment(other, data=_data(), tracker=InMemoryTracker(), artifacts=store, resume=True)

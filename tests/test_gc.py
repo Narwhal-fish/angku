@@ -152,6 +152,7 @@ def test_live_runs_are_never_touched(spec, store):
     assert plan.delete == []
     reasons = {i.run_id: i.reason for i in plan.kept}
     assert reasons == {running: "live, heartbeat 5s ago", resuming: "live, heartbeat 1s ago"}
+    assert {i.run_id: i.status for i in plan.kept} == {running: "RUNNING", resuming: "RESUMING"}
 
 
 def test_stale_heartbeat_is_not_live(spec, store):

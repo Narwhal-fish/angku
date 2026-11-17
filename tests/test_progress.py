@@ -32,7 +32,7 @@ from angku.application.listing import list_runs
 from angku.application.progress import PROGRESS, STALE_AFTER, Progress, is_live, load_progress, save_progress
 from angku.cli import main
 from angku.config import load_experiment_yaml
-from angku.domain import compute_experiment_id, compute_run_id
+from angku.domain import RunManifest, compute_experiment_id, compute_run_id
 
 ROOT = Path(__file__).parent.parent
 SMOKE = ROOT / "experiments/configs/tiny_cnn_smoke.yaml"
@@ -138,6 +138,19 @@ def test_a_live_run_lists_as_running(spec):
     (s,) = list_runs(store, now=1010.0)
     assert s.status == "RUNNING"
     assert (s.epochs_done, s.final_metrics, s.resumable) == (2, {"val/loss": 0.4}, False)
+
+
+def test_a_resumed_failed_run_lists_as_resuming(spec):
+    store, run_id = _stored(spec, progress=_progress(), checkpoint=True)
+    manifest = RunManifest(
+        experiment_id=compute_experiment_id(spec), run_id=run_id, attempt=1, status="FAILED", device="cpu"
+    )
+    store.put(run_id, MANIFEST, manifest.model_dump_json().encode())
+    (s,) = list_runs(store, now=1010.0)
+    assert (s.status, s.resumable, s.attempt, s.updated) == ("RESUMING", False, 1, 1000.0)
+    assert (s.epochs_done, s.final_metrics) == (2, {"val/loss": 0.4})
+    (s,) = list_runs(store, now=1000.0 + STALE_AFTER + 1)
+    assert (s.status, s.resumable) == ("FAILED", True)
 
 
 def test_a_stale_run_falls_back(spec):

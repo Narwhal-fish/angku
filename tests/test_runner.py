@@ -9,9 +9,11 @@ from typing import Any
 import pytest
 import torch
 
+from angku.adapters.inmemory_artifacts import InMemoryArtifactStore
 from angku.adapters.inmemory_tracker import InMemoryTracker
 from angku.adapters.synthetic_data import SyntheticBlobs
 from angku.application import RunnerError, run_experiment
+from angku.application.bundle import MANIFEST
 from angku.config import load_experiment_dict, load_experiment_yaml
 from angku.domain import UnpinnedInputError, compute_experiment_id, compute_run_id
 from angku.domain.experiment import Dataset
@@ -559,3 +561,36 @@ def test_val_shards_cover_every_case_exactly_once(n, world_size):
     shards = [list(ShardSampler(n, rank=r, world_size=world_size)) for r in range(world_size)]
     assert sorted(i for s in shards for i in s) == list(range(n))
     assert [len(ShardSampler(n, rank=r, world_size=world_size)) for r in range(world_size)] == [len(s) for s in shards]
+
+
+class _ManifestSeenTracker(InMemoryTracker):
+    def __init__(self, store) -> None:
+        super().__init__()
+        self.store = store
+        self.manifest_at_end: list[bool] = []
+
+    def end_run(self, status):
+        self.manifest_at_end.append(bool(self.store.runs()) and MANIFEST in self.store.list(self.current.run_id))
+        super().end_run(status)
+
+
+class _DiskFullStore(InMemoryArtifactStore):
+    def put(self, run_id, name, data):
+        if name == MANIFEST:
+            raise OSError("No space left on device")
+        super().put(run_id, name, data)
+
+
+def test_tracker_hears_finished_only_after_the_bundle_landed(spec):
+    store = InMemoryArtifactStore()
+    tracker = _ManifestSeenTracker(store)
+    run_experiment(spec, data=_data(), tracker=tracker, artifacts=store)
+    assert tracker.runs[0].status == "FINISHED"
+    assert tracker.manifest_at_end == [True]
+
+
+def test_bundle_write_failure_ends_the_tracker_run_failed(spec):
+    tracker = InMemoryTracker()
+    with pytest.raises(OSError, match="No space"):
+        run_experiment(spec, data=_data(), tracker=tracker, artifacts=_DiskFullStore())
+    assert [r.status for r in tracker.runs] == ["FAILED"]

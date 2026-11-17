@@ -64,11 +64,15 @@ def save_bundle(
     if split is not None:
         store.put(run_id, SPLIT, split.model_dump_json(indent=2).encode())
     # Weights before the manifest: a FINISHED manifest promises its files are there.
+    if manifest.status == "FINISHED":
+        store.delete(run_id, MANIFEST)
     for name, state in ((MODEL, model_state), (BEST, best_state)):
         if state is not None:
             buf = io.BytesIO()
             torch.save(dict(state), buf)
             store.put(run_id, name, buf.getvalue())
+        elif manifest.status == "FAILED":
+            store.delete(run_id, name)
     store.put(run_id, MANIFEST, manifest.model_dump_json(indent=2).encode())
 
 

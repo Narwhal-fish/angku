@@ -134,6 +134,13 @@ def test_overview_of_a_running_run():
     assert rows["environment"] == "recorded when the run ends"
 
 
+def test_overview_of_a_resuming_run():
+    s = _summary(status="RESUMING", epochs_done=2, epochs_total=5, updated=1000.0)
+    rows = dict(overview_rows(s, spec=None, manifest=None, now=1003.0))
+    assert rows["progress"] == "epoch 2 / 5, heartbeat 3s ago"
+    assert rows["environment"] == "recorded when the run ends"
+
+
 def test_overview_without_manifest():
     s = _summary(status="INTERRUPTED", attempt=None, epochs_done=None, final_metrics={}, resumable=True)
     rows = dict(overview_rows(s, spec=None, manifest=None))

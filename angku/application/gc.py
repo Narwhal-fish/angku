@@ -4,9 +4,8 @@
 CLI's default is a dry run. Statuses come from ``list_runs``, so gc sees exactly what
 ``angku list`` / ``angku ui`` show:
 
-    RUNNING       always kept (a live process is writing it); so is any run with a live
-                  heartbeat, whatever its manifest says: resuming a FAILED run keeps the
-                  FAILED manifest until the new one lands
+    RUNNING       always kept (a live process is writing it)
+    RESUMING      always kept (a FAILED run that ``angku resume`` is continuing)
     UNREADABLE    always kept (nobody knows what it is)
     FAILED        deleted; kept when resumable unless ``resumable=True``
     INTERRUPTED   (always resumable) kept unless ``resumable=True``
@@ -38,8 +37,9 @@ from typing import Any
 from angku.application.bundle import CHECKPOINT, LAUNCH, MANIFEST, SPEC, load_launch, ray_run_name
 from angku.application.listing import RunSummary, list_runs, summarise_run
 from angku.application.predict import RESULT
-from angku.application.progress import PROGRESS, is_live, read_progress
+from angku.application.progress import PROGRESS
 from angku.domain.prediction import parse_result
+from angku.domain.run_state import LIVE, RunState
 from angku.ports.artifacts import ArtifactError, ArtifactStore
 from angku.ports.ray_storage import RayStorage
 
@@ -140,16 +140,15 @@ def plan_gc(
 
     old = _old_attempts(runs, policy.keep_attempts, used_by, kept) if policy.keep_attempts else set()
     for s in runs:
-        heartbeat = _heartbeat(store, s.run_id, now)
-        if heartbeat is not None:  # RUNNING, or a FAILED run being resumed (its old manifest still says FAILED)
-            kept.append(_item(s, f"live, heartbeat {now - heartbeat:.0f}s ago"))
-        elif s.status == "UNREADABLE":
+        if s.status in LIVE:
+            kept.append(_item(s, f"live, heartbeat {now - (s.updated or now):.0f}s ago"))
+        elif s.status == RunState.UNREADABLE:
             kept.append(_item(s, f"unreadable: {s.error}"))
-        elif s.status in ("FAILED", "INTERRUPTED") and s.resumable and not policy.resumable:
+        elif s.status in (RunState.FAILED, RunState.INTERRUPTED) and s.resumable and not policy.resumable:
             kept.append(_item(s, "resumable (--resumable to delete)"))
-        elif s.status in ("FAILED", "INTERRUPTED"):
+        elif s.status in (RunState.FAILED, RunState.INTERRUPTED):
             whole(s, _progress_text(s) + (", resumable" if s.resumable else ", not resumable"))
-        elif s.status == "INCOMPLETE":
+        elif s.status == RunState.INCOMPLETE:
             whole(s, "no manifest, no checkpoint")
         elif s.run_id in old:
             whole(s, f"older attempt (keeping the newest {policy.keep_attempts})")
@@ -181,7 +180,7 @@ def apply_gc(
         if s is None:
             skipped.append((item, "gone"))
             continue
-        if _heartbeat(store, item.run_id, t) is not None:
+        if s.status in LIVE:
             skipped.append((item, "now live (started or resumed since the plan)"))
             continue
         if (s.status, s.resumable) != (item.status, item.resumable):
@@ -211,13 +210,6 @@ def apply_gc(
 
 def _item(s: RunSummary, reason: str, **kw: Any) -> GcItem:
     return GcItem(run_id=s.run_id, name=s.name, status=s.status, resumable=s.resumable, reason=reason, **kw)
-
-
-def _heartbeat(store: ArtifactStore, run_id: str, now: float) -> float | None:
-    """Time of the last heartbeat when a live process is writing ``run_id``, else None. Checked
-    even when a manifest exists: ``angku resume`` of a FAILED run keeps the FAILED manifest."""
-    p = read_progress(store, run_id)
-    return p.updated if p is not None and is_live(p, now=now) else None
 
 
 def _progress_text(s: RunSummary) -> str:
@@ -258,7 +250,7 @@ def _old_attempts(runs: list[RunSummary], keep: int, used_by: dict[str, str], ke
     old: set[str] = set()
     groups: dict[str, list[RunSummary]] = {}
     for s in runs:
-        if s.status == "FINISHED":
+        if s.status == RunState.FINISHED:
             groups.setdefault(s.experiment_id, []).append(s)
     for group in groups.values():
         newest_first = sorted(group, key=lambda r: (r.attempt or 0, r.run_id), reverse=True)
@@ -288,7 +280,7 @@ def _ray_dir(
         return None
     d = RayDir(launch.storage_path, ray_run_name(s.run_id, launch.attempt))
     if ray_storage is None:
-        if s.status != "FINISHED":  # FINISHED: usually already deleted by the launcher
+        if s.status != RunState.FINISHED:  # FINISHED: usually already deleted by the launcher
             warnings.append(f"run {s.run_id[:12]}: Ray checkpoints at {d} stay (pass --ray-storage)")
         return None
     exists = ray_storage.exists(d.storage_path, d.name)

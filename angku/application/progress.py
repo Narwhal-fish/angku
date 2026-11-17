@@ -9,27 +9,23 @@ always wins: a leftover progress file next to one is ignored.
 
 from __future__ import annotations
 
-from typing import Literal
+from pydantic import ValidationError
 
-from pydantic import BaseModel, ConfigDict, ValidationError
-
+from angku.domain.progress import HEARTBEAT, STALE_AFTER, Progress, is_live
 from angku.ports.artifacts import ArtifactError, ArtifactStore
 
+__all__ = [
+    "HEARTBEAT",
+    "PROGRESS",
+    "STALE_AFTER",
+    "Progress",
+    "is_live",
+    "load_progress",
+    "read_progress",
+    "save_progress",
+]
+
 PROGRESS = "progress.json"
-HEARTBEAT = 15.0  # seconds between heartbeats
-STALE_AFTER = 60.0  # a heartbeat older than this = the process is gone
-
-
-class Progress(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid", ser_json_inf_nan="constants")
-
-    run_id: str
-    state: Literal["running", "ended"]
-    epoch: int  # last epoch logged (absolute; 0 = none yet in this segment)
-    epochs: int  # spec.training.epochs
-    started: float  # unix seconds
-    updated: float  # last write: epoch or heartbeat
-    history: list[dict[str, float]]  # epochs logged by this process (a resume starts empty)
 
 
 def save_progress(store: ArtifactStore, p: Progress) -> None:
@@ -46,7 +42,3 @@ def read_progress(store: ArtifactStore, run_id: str) -> Progress | None:
         return load_progress(store, run_id)
     except (ArtifactError, ValidationError, ValueError):
         return None
-
-
-def is_live(p: Progress, *, now: float) -> bool:
-    return p.state == "running" and now - p.updated <= STALE_AFTER
