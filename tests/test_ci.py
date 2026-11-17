@@ -1,6 +1,6 @@
 """.github/workflows/ci.yml: checked statically (it only runs on GitHub).
 
-The lint job must run the ruff version pinned in the dev extra, or CI and the dev box disagree
+The lint job must run the ruff and import-linter versions pinned in the dev extra, or CI and the dev box disagree
 on what passes; the formatting commits listed in .git-blame-ignore-revs must be full SHAs on the current history
 (a squash merge replaces the branch's commits, leaving the listed one unreachable).
 """
@@ -19,9 +19,13 @@ WORKFLOW = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
 PYPROJECT = tomllib.loads((ROOT / "pyproject.toml").read_text())
 
 
-def _dev_ruff_pin() -> str:
-    (pin,) = [d for d in PYPROJECT["project"]["optional-dependencies"]["dev"] if d.startswith("ruff")]
-    return re.fullmatch(r"ruff==([\d.]+)", pin).group(1)
+def _dev_pin(name: str) -> str:
+    (pin,) = [d for d in PYPROJECT["project"]["optional-dependencies"]["dev"] if d.startswith(f"{name}==")]
+    return pin.removeprefix(f"{name}==")
+
+
+def _lint_script() -> str:
+    return "\n".join(step.get("run", "") for step in WORKFLOW["jobs"]["lint"]["steps"])
 
 
 def test_runs_on_pull_requests_only():
@@ -30,10 +34,18 @@ def test_runs_on_pull_requests_only():
 
 
 def test_lint_job_runs_the_pinned_ruff_check_and_format():
-    script = "\n".join(step.get("run", "") for step in WORKFLOW["jobs"]["lint"]["steps"])
+    script = _lint_script()
     versions = set(re.findall(r"ruff@([\d.]+)", script))
-    assert versions == {_dev_ruff_pin()}
+    assert versions == {_dev_pin("ruff")}
     assert "ruff@" in script and " check" in script and "format --check" in script
+
+
+def test_lint_job_runs_the_pinned_import_linter_on_non_empty_contracts():
+    script = _lint_script()
+    versions = set(re.findall(r"import-linter==([\d.]+)", script))
+    assert versions == {_dev_pin("import-linter")}
+    assert "lint-imports" in script
+    assert PYPROJECT["tool"]["importlinter"]["contracts"]
 
 
 def _blame_ignore_revs() -> list[str]:

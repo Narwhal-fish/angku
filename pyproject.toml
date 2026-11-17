@@ -21,6 +21,7 @@ dev = [
     "ray[train]>=2.40",  # so the Ray launcher tests run on the dev box
     "textual>=8.0",  # so the `angku ui` tests run on the dev box
     "ruff==0.17.0",  # pinned: CI runs the same version, a new release must not fail old code
+    "import-linter==2.16",  # pinned: CI runs the same version, a new release must not fail old code
 ]
 # Optional tracking backends. The core never imports them at module import time.
 tracking = [
@@ -73,3 +74,37 @@ extend-immutable-calls = ["angku.application.runner.Worker"]
 [tool.ruff.lint.per-file-ignores]
 # A test that takes a pytest fixture as an argument shadows the fixture function's name.
 "tests/**" = ["F811"]
+
+# Architecture contracts (see CLAUDE.md "Architecture"): `lint-imports` in CI, same version as the dev pin.
+[tool.importlinter]
+root_packages = ["angku", "experiments"]
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "Hexagonal layers: cli/ui -> adapters -> application -> ports -> domain"
+type = "layers"
+layers = [
+    "angku.cli : angku.ui",
+    "angku.adapters",
+    "angku.application",
+    "angku.ports",
+    "angku.domain",
+]
+
+[[tool.importlinter.contracts]]
+name = "Domain is pure: no torch, no infra, no registry or YAML config"
+type = "forbidden"
+source_modules = ["angku.domain"]
+forbidden_modules = ["torch", "mlflow", "ray", "textual", "monai", "angku.registry", "angku.config"]
+
+[[tool.importlinter.contracts]]
+name = "Core imports no extra"
+type = "forbidden"
+source_modules = ["angku.domain", "angku.ports", "angku.application", "angku.config", "angku.registry"]
+forbidden_modules = ["mlflow", "ray", "textual", "monai"]
+
+[[tool.importlinter.contracts]]
+name = "angku never imports experiments"
+type = "forbidden"
+source_modules = ["angku"]
+forbidden_modules = ["experiments"]
